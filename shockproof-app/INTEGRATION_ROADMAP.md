@@ -107,6 +107,12 @@ Return JSON: title, message, actions[].
 
 Create a Supabase project.
 
+Run the full SQL setup in:
+
+```txt
+supabase/schema.sql
+```
+
 Tables:
 
 ```sql
