@@ -8,5 +8,11 @@ export function createClient() {
     throw new Error("Missing Supabase browser environment variables.");
   }
 
-  return createBrowserClient(supabaseUrl, supabaseAnonKey);
+  return createBrowserClient(supabaseUrl, supabaseAnonKey, {
+    auth: {
+      experimental: {
+        passkey: true,
+      },
+    },
+  });
 }

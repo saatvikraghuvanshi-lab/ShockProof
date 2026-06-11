@@ -2,9 +2,11 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Fingerprint, Mail } from "lucide-react";
+import { useState } from "react";
+import { Fingerprint, LoaderCircle, Mail } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { createClient } from "@/lib/supabase/browser";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -27,10 +29,77 @@ export function LoginForm({
   ...props
 }: React.ComponentProps<"div">) {
   const router = useRouter();
+  const [email, setEmail] = useState("");
+  const [status, setStatus] = useState(() => {
+    if (typeof window === "undefined") {
+      return "";
+    }
 
-  function completeSignIn() {
-    window.localStorage.setItem("shockproof-auth", "true");
+    return new URLSearchParams(window.location.search).get("message") ?? "";
+  });
+  const [pendingAction, setPendingAction] = useState<
+    "passkey" | "google" | "email" | null
+  >(null);
+
+  async function signInWithPasskey() {
+    setStatus("");
+    setPendingAction("passkey");
+
+    const supabase = createClient();
+    const { error } = await supabase.auth.signInWithPasskey();
+
+    setPendingAction(null);
+
+    if (error) {
+      setStatus(
+        `${error.message}. If passkeys are not enabled in Supabase yet, use Google or email for now.`
+      );
+      return;
+    }
+
     router.push("/dashboard");
+    router.refresh();
+  }
+
+  async function signInWithGoogle() {
+    setStatus("");
+    setPendingAction("google");
+
+    const supabase = createClient();
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`,
+      },
+    });
+
+    if (error) {
+      setPendingAction(null);
+      setStatus(error.message);
+    }
+  }
+
+  async function sendMagicLink() {
+    setStatus("");
+    setPendingAction("email");
+
+    const supabase = createClient();
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: {
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        shouldCreateUser: true,
+      },
+    });
+
+    setPendingAction(null);
+
+    if (error) {
+      setStatus(error.message);
+      return;
+    }
+
+    setStatus("Magic link sent. Open your email and continue from that link.");
   }
 
   return (
@@ -48,22 +117,36 @@ export function LoginForm({
           <form
             onSubmit={(event) => {
               event.preventDefault();
-              completeSignIn();
+              void sendMagicLink();
             }}
           >
             <FieldGroup>
               <Field>
-                <Button type="button" className="h-11" onClick={completeSignIn}>
-                  <Fingerprint className="size-4" />
+                <Button
+                  type="button"
+                  className="h-11"
+                  disabled={pendingAction !== null}
+                  onClick={() => void signInWithPasskey()}
+                >
+                  {pendingAction === "passkey" ? (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  ) : (
+                    <Fingerprint className="size-4" />
+                  )}
                   Continue with passkey
                 </Button>
                 <Button
                   variant="outline"
                   type="button"
                   className="h-11"
-                  onClick={completeSignIn}
+                  disabled={pendingAction !== null}
+                  onClick={() => void signInWithGoogle()}
                 >
-                  <Mail className="size-4" />
+                  {pendingAction === "google" ? (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  ) : (
+                    <Mail className="size-4" />
+                  )}
                   Continue with Google
                 </Button>
               </Field>
@@ -76,11 +159,23 @@ export function LoginForm({
                   id="email"
                   type="email"
                   placeholder="you@example.com"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
                   required
                 />
               </Field>
               <Field>
-                <Button type="submit">Send magic link</Button>
+                <Button type="submit" disabled={pendingAction !== null}>
+                  {pendingAction === "email" ? (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  ) : null}
+                  Send magic link
+                </Button>
+                {status ? (
+                  <FieldDescription className="rounded-xl border border-white/10 bg-white/5 p-3 text-center">
+                    {status}
+                  </FieldDescription>
+                ) : null}
                 <FieldDescription className="text-center">
                   New household? <Link href="/signup">Create setup</Link>
                 </FieldDescription>

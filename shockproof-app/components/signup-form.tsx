@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { LoaderCircle, Mail } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import {
@@ -11,6 +11,7 @@ import {
   indianStatesAndUnionTerritories,
   suggestedDiscomsByState,
 } from "@/lib/india-power-options";
+import { createClient } from "@/lib/supabase/browser";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -39,15 +40,57 @@ export function SignupForm({
   className,
   ...props
 }: React.ComponentProps<"div">) {
-  const router = useRouter();
+  const [email, setEmail] = useState("");
   const [selectedState, setSelectedState] = useState("");
+  const [status, setStatus] = useState("");
+  const [pendingAction, setPendingAction] = useState<"google" | "email" | null>(
+    null
+  );
   const suggestedDiscoms = selectedState
     ? suggestedDiscomsByState[selectedState] ?? []
     : [];
 
-  function completeSignup() {
-    window.localStorage.setItem("shockproof-auth", "true");
-    router.push("/dashboard");
+  async function createSetupWithEmail() {
+    setStatus("");
+    setPendingAction("email");
+
+    const supabase = createClient();
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: {
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        shouldCreateUser: true,
+      },
+    });
+
+    setPendingAction(null);
+
+    if (error) {
+      setStatus(error.message);
+      return;
+    }
+
+    setStatus(
+      "Setup link sent. Open your email, then ShockProof will continue to the dashboard."
+    );
+  }
+
+  async function continueWithGoogle() {
+    setStatus("");
+    setPendingAction("google");
+
+    const supabase = createClient();
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`,
+      },
+    });
+
+    if (error) {
+      setPendingAction(null);
+      setStatus(error.message);
+    }
   }
 
   return (
@@ -65,10 +108,26 @@ export function SignupForm({
           <form
             onSubmit={(event) => {
               event.preventDefault();
-              completeSignup();
+              void createSetupWithEmail();
             }}
           >
             <FieldGroup>
+              <Field>
+                <Button
+                  variant="outline"
+                  type="button"
+                  className="h-11"
+                  disabled={pendingAction !== null}
+                  onClick={() => void continueWithGoogle()}
+                >
+                  {pendingAction === "google" ? (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  ) : (
+                    <Mail className="size-4" />
+                  )}
+                  Continue with Google
+                </Button>
+              </Field>
               <Field>
                 <FieldLabel htmlFor="name">Household name</FieldLabel>
                 <Input id="name" type="text" placeholder="Home" required />
@@ -79,6 +138,8 @@ export function SignupForm({
                   id="email"
                   type="email"
                   placeholder="you@example.com"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
                   required
                 />
               </Field>
@@ -149,7 +210,17 @@ export function SignupForm({
                 </FieldDescription>
               </Field>
               <Field>
-                <Button type="submit">Create setup</Button>
+                <Button type="submit" disabled={pendingAction !== null}>
+                  {pendingAction === "email" ? (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  ) : null}
+                  Create setup with email
+                </Button>
+                {status ? (
+                  <FieldDescription className="rounded-xl border border-white/10 bg-white/5 p-3 text-center">
+                    {status}
+                  </FieldDescription>
+                ) : null}
                 <FieldDescription className="text-center">
                   Already set up? <Link href="/login">Sign in</Link>
                 </FieldDescription>

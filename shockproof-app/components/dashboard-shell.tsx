@@ -6,9 +6,11 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Camera,
+  Fingerprint,
   Gauge,
   ImageIcon,
   LayoutDashboard,
+  LoaderCircle,
   LogOut,
   Settings,
   Sparkles,
@@ -26,6 +28,7 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { createClient } from "@/lib/supabase/browser";
 import {
   Card,
   CardContent,
@@ -77,22 +80,58 @@ export function DashboardShell() {
   const [selectedState, setSelectedState] = useState("");
   const [captureFileName, setCaptureFileName] = useState("");
   const [activeTab, setActiveTab] = useState<AppTab>("dashboard");
+  const [isPasskeyPending, setIsPasskeyPending] = useState(false);
+  const [passkeyStatus, setPasskeyStatus] = useState("");
   const suggestedDiscoms = selectedState
     ? suggestedDiscomsByState[selectedState] ?? []
     : [];
 
   useEffect(() => {
-    if (window.localStorage.getItem("shockproof-auth") !== "true") {
-      router.replace("/login");
+    const supabase = createClient();
+
+    async function checkSession() {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session) {
+        router.replace("/login");
+        return;
+      }
+
+      setIsCheckingAuth(false);
+    }
+
+    void checkSession();
+  }, [router]);
+
+  async function signOut() {
+    const supabase = createClient();
+
+    await supabase.auth.signOut();
+    router.replace("/login");
+    router.refresh();
+  }
+
+  async function registerPasskey() {
+    setPasskeyStatus("");
+    setIsPasskeyPending(true);
+
+    const supabase = createClient();
+    const { error } = await supabase.auth.registerPasskey();
+
+    setIsPasskeyPending(false);
+
+    if (error) {
+      setPasskeyStatus(
+        `${error.message}. Make sure passkeys are enabled in Supabase Auth and you are using localhost or HTTPS.`
+      );
       return;
     }
 
-    window.setTimeout(() => setIsCheckingAuth(false), 0);
-  }, [router]);
-
-  function signOut() {
-    window.localStorage.removeItem("shockproof-auth");
-    router.replace("/login");
+    setPasskeyStatus(
+      "Passkey added. Next time you can use Continue with passkey on the login screen."
+    );
   }
 
   function handleCaptureFile(file?: File) {
@@ -149,7 +188,7 @@ export function DashboardShell() {
             variant="ghost"
             size="sm"
             className="gap-2 rounded-full text-muted-foreground hover:bg-white/10 hover:text-white"
-            onClick={signOut}
+            onClick={() => void signOut()}
           >
             <LogOut className="size-4" />
             <span className="hidden sm:inline">Sign out</span>
@@ -533,6 +572,44 @@ export function DashboardShell() {
                       </div>
                     ))}
                   </div>
+
+                  <section className="grid gap-3">
+                    <div>
+                      <h3 className="text-xl font-bold">Passkey access</h3>
+                      <p className="text-sm text-muted-foreground">
+                        Register this browser/device for fingerprint, Face ID,
+                        Windows Hello, or device PIN sign-in.
+                      </p>
+                    </div>
+                    <div className="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <p className="font-bold">This device</p>
+                        <p className="text-sm text-muted-foreground">
+                          Works after the first Google or email sign-in.
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        className="sm:w-auto"
+                        disabled={isPasskeyPending}
+                        onClick={() => void registerPasskey()}
+                      >
+                        {isPasskeyPending ? (
+                          <LoaderCircle className="size-4 animate-spin" />
+                        ) : (
+                          <Fingerprint className="size-4" />
+                        )}
+                        Add passkey
+                      </Button>
+                    </div>
+                    {passkeyStatus ? (
+                      <Alert className="border-white/10 bg-white/5">
+                        <Fingerprint className="size-4" />
+                        <AlertTitle>Passkey status</AlertTitle>
+                        <AlertDescription>{passkeyStatus}</AlertDescription>
+                      </Alert>
+                    ) : null}
+                  </section>
 
                   <section className="grid gap-3">
                     <div>
