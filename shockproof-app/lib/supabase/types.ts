@@ -9,6 +9,7 @@ export type Json =
 export type ReadingStatus =
   | "draft"
   | "uploading"
+  | "uploaded"
   | "processing"
-  | "completed"
+  | "processed"
   | "failed";

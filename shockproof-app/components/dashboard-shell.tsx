@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Camera,
@@ -29,6 +29,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/browser";
+import type { ReadingStatus } from "@/lib/supabase/types";
 import {
   Card,
   CardContent,
@@ -49,13 +50,6 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 
-const metrics = [
-  ["Current", "-- kWh", "Waiting for first meter read"],
-  ["Projected", "--", "Needs Discom tariff rules"],
-  ["Safe pace", "-- / day", "Set billing cycle first"],
-  ["Status", "Ready", "Start with meter capture"],
-];
-
 const pipeline = ["Video upload", "Gemini OCR", "Postgres slabs", "AI advice"];
 
 const appTabs = [
@@ -67,6 +61,37 @@ const appTabs = [
 
 type AppTab = (typeof appTabs)[number]["value"];
 
+type Household = {
+  id: string;
+  state: string;
+  discom: string;
+  billing_cycle_day: number | null;
+};
+
+type MeterReading = {
+  id: string;
+  status: ReadingStatus;
+  reading_kwh: number | null;
+  confidence: number | null;
+  captured_at: string;
+  error_message: string | null;
+};
+
+type ReadingProjection = {
+  current_usage: number | null;
+  projected_units: number | null;
+  next_slab_at: number | null;
+  units_to_next_slab: number | null;
+  estimated_bill: number | null;
+  estimated_delta: number | null;
+  bill_risk: "low" | "medium" | "high" | null;
+  advice_json: {
+    title?: string;
+    message?: string;
+    actions?: string[];
+  } | null;
+};
+
 const permissions = [
   ["Camera access", "Required for the 5-second smart meter capture flow."],
   ["Notifications", "Needed for slab-jump alerts before the bill shock happens."],
@@ -77,14 +102,91 @@ const permissions = [
 export function DashboardShell() {
   const router = useRouter();
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const [userId, setUserId] = useState("");
+  const [household, setHousehold] = useState<Household | null>(null);
+  const [latestReading, setLatestReading] = useState<MeterReading | null>(null);
+  const [latestProjection, setLatestProjection] =
+    useState<ReadingProjection | null>(null);
   const [selectedState, setSelectedState] = useState("");
   const [captureFileName, setCaptureFileName] = useState("");
+  const [captureStatus, setCaptureStatus] = useState("");
   const [activeTab, setActiveTab] = useState<AppTab>("dashboard");
+  const [isUploadingCapture, setIsUploadingCapture] = useState(false);
   const [isPasskeyPending, setIsPasskeyPending] = useState(false);
   const [passkeyStatus, setPasskeyStatus] = useState("");
   const suggestedDiscoms = selectedState
     ? suggestedDiscomsByState[selectedState] ?? []
     : [];
+
+  const metrics = useMemo(
+    () => [
+      [
+        "Current",
+        latestProjection?.current_usage !== null &&
+        latestProjection?.current_usage !== undefined
+          ? `${Math.round(latestProjection.current_usage)} kWh`
+          : latestReading?.reading_kwh
+            ? `${Math.round(latestReading.reading_kwh)} kWh`
+            : "-- kWh",
+        latestReading?.captured_at
+          ? `Captured ${new Date(latestReading.captured_at).toLocaleDateString()}`
+          : "Waiting for first meter read",
+      ],
+      [
+        "Projected",
+        latestProjection?.projected_units
+          ? `${Math.round(latestProjection.projected_units)} kWh`
+          : "--",
+        latestProjection ? "Month-end projection" : "Needs Discom tariff rules",
+      ],
+      [
+        "Next slab",
+        latestProjection?.units_to_next_slab !== null &&
+        latestProjection?.units_to_next_slab !== undefined
+          ? `${Math.round(latestProjection.units_to_next_slab)} kWh`
+          : "--",
+        latestProjection?.next_slab_at
+          ? `Threshold ${Math.round(latestProjection.next_slab_at)} kWh`
+          : "Set billing cycle first",
+      ],
+      [
+        "Status",
+        latestReading?.status ?? "Ready",
+        latestReading?.error_message ?? "Start with meter capture",
+      ],
+    ],
+    [latestProjection, latestReading]
+  );
+
+  const loadLatestForHousehold = useCallback(async (householdId: string) => {
+    const supabase = createClient();
+    const { data: reading } = await supabase
+      .from("meter_readings")
+      .select("id, status, reading_kwh, confidence, captured_at, error_message")
+      .eq("household_id", householdId)
+      .order("captured_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    setLatestReading((reading as MeterReading | null) ?? null);
+
+    if (!reading?.id) {
+      setLatestProjection(null);
+      return;
+    }
+
+    const { data: projection } = await supabase
+      .from("reading_projections")
+      .select(
+        "current_usage, projected_units, next_slab_at, units_to_next_slab, estimated_bill, estimated_delta, bill_risk, advice_json"
+      )
+      .eq("reading_id", reading.id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    setLatestProjection((projection as ReadingProjection | null) ?? null);
+  }, []);
 
   useEffect(() => {
     const supabase = createClient();
@@ -99,11 +201,77 @@ export function DashboardShell() {
         return;
       }
 
+      setUserId(session.user.id);
+
+      const { data: existingHousehold } = await supabase
+        .from("households")
+        .select("id, state, discom, billing_cycle_day")
+        .eq("owner_id", session.user.id)
+        .order("created_at", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      const resolvedHousehold =
+        existingHousehold ??
+        (
+          await supabase
+            .from("households")
+            .insert({
+              owner_id: session.user.id,
+              household_name: "Home",
+              state: "Karnataka",
+              discom: "bescom",
+              billing_cycle_day: 1,
+            })
+            .select("id, state, discom, billing_cycle_day")
+            .single()
+        ).data;
+
+      if (resolvedHousehold) {
+        const typedHousehold = resolvedHousehold as Household;
+        setHousehold(typedHousehold);
+        setSelectedState(typedHousehold.state);
+        await loadLatestForHousehold(typedHousehold.id);
+      }
+
       setIsCheckingAuth(false);
     }
 
     void checkSession();
-  }, [router]);
+  }, [loadLatestForHousehold, router]);
+
+  useEffect(() => {
+    if (!userId || !household?.id) {
+      return;
+    }
+
+    const supabase = createClient();
+    const channel = supabase
+      .channel(`dashboard-updates-${userId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "meter_readings",
+          filter: `captured_by=eq.${userId}`,
+        },
+        () => void loadLatestForHousehold(household.id)
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "reading_projections",
+        },
+        () => void loadLatestForHousehold(household.id)
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [household?.id, loadLatestForHousehold, userId]);
 
   async function signOut() {
     const supabase = createClient();
@@ -134,12 +302,101 @@ export function DashboardShell() {
     );
   }
 
-  function handleCaptureFile(file?: File) {
+  async function handleCaptureFile(file?: File) {
     if (!file) {
       return;
     }
 
     setCaptureFileName(file.name);
+    setCaptureStatus("");
+
+    if (!household || !userId) {
+      setCaptureStatus("Household setup is still loading. Try again in a moment.");
+      return;
+    }
+
+    if (!file.type.startsWith("image/") && !file.type.startsWith("video/")) {
+      setCaptureStatus("Choose an image or video meter capture.");
+      return;
+    }
+
+    if (file.size > 20 * 1024 * 1024) {
+      setCaptureStatus("Use a file under 20 MB so Gemini can process it inline.");
+      return;
+    }
+
+    setIsUploadingCapture(true);
+    setCaptureStatus("Creating meter reading...");
+
+    const supabase = createClient();
+    const fileType = file.type.startsWith("video/") ? "video" : "image";
+    const { data: reading, error: readingError } = await supabase
+      .from("meter_readings")
+      .insert({
+        household_id: household.id,
+        captured_by: userId,
+        file_type: fileType,
+        status: "uploading",
+      })
+      .select("id, status, reading_kwh, confidence, captured_at, error_message")
+      .single();
+
+    if (readingError || !reading) {
+      setCaptureStatus(readingError?.message ?? "Could not create reading.");
+      setIsUploadingCapture(false);
+      return;
+    }
+
+    setLatestReading(reading as MeterReading);
+    setCaptureStatus("Uploading capture...");
+
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "-");
+    const filePath = `${userId}/${household.id}/${reading.id}/${Date.now()}-${safeName}`;
+    const { error: uploadError } = await supabase.storage
+      .from("meter-captures")
+      .upload(filePath, file, {
+        contentType: file.type,
+        upsert: false,
+      });
+
+    if (uploadError) {
+      await supabase
+        .from("meter_readings")
+        .update({ status: "failed", error_message: uploadError.message })
+        .eq("id", reading.id);
+      setCaptureStatus(uploadError.message);
+      setIsUploadingCapture(false);
+      return;
+    }
+
+    await supabase
+      .from("meter_readings")
+      .update({
+        file_path: filePath,
+        status: "uploaded",
+      })
+      .eq("id", reading.id);
+
+    setCaptureStatus("Uploaded. Extracting kWh with Gemini...");
+
+    const processResponse = await fetch("/api/readings/process", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ readingId: reading.id }),
+    });
+    const processPayload = await processResponse.json();
+
+    if (!processResponse.ok) {
+      setCaptureStatus(processPayload.error ?? "Processing failed.");
+      setIsUploadingCapture(false);
+      return;
+    }
+
+    setCaptureStatus("Processed. Dashboard updated.");
+    setIsUploadingCapture(false);
+    await loadLatestForHousehold(household.id);
   }
 
   if (isCheckingAuth) {
@@ -237,14 +494,21 @@ export function DashboardShell() {
                           Bill trajectory
                         </CardTitle>
                       </div>
-                      <Badge variant="secondary">Not synced</Badge>
+                      <Badge variant="secondary">
+                        {latestReading?.status ?? "Not synced"}
+                      </Badge>
                     </div>
                   </CardHeader>
                   <CardContent className="space-y-5">
                     <div className="grid gap-5 sm:grid-cols-[132px_1fr] sm:items-center">
                       <div className="grid size-32 place-items-center rounded-full border border-white/10 bg-white/5">
                         <div className="text-center">
-                          <p className="text-3xl font-extrabold">--</p>
+                          <p className="text-3xl font-extrabold">
+                            {latestProjection?.units_to_next_slab !== null &&
+                            latestProjection?.units_to_next_slab !== undefined
+                              ? Math.round(latestProjection.units_to_next_slab)
+                              : "--"}
+                          </p>
                           <p className="text-xs font-semibold text-muted-foreground">
                             to next slab
                           </p>
@@ -252,27 +516,52 @@ export function DashboardShell() {
                       </div>
                       <div>
                         <p className="text-sm font-bold text-destructive">
-                          Awaiting meter reading
+                          {latestProjection?.bill_risk
+                            ? `${latestProjection.bill_risk} bill risk`
+                            : "Awaiting meter reading"}
                         </p>
                         <h2 className="text-2xl font-extrabold">
-                          No reading yet
+                          {latestReading?.reading_kwh
+                            ? `${Math.round(latestReading.reading_kwh)} kWh extracted`
+                            : "No reading yet"}
                         </h2>
                         <p className="mt-2 text-sm text-muted-foreground">
-                          Record a meter clip to calculate projected usage,
-                          slab threshold, and bill-risk trajectory.
+                          {latestProjection
+                            ? `Projected ${Math.round(
+                                latestProjection.projected_units ?? 0
+                              )} kWh with an estimated bill of Rs ${Math.round(
+                                latestProjection.estimated_bill ?? 0
+                              )}.`
+                            : "Record a meter clip to calculate projected usage, slab threshold, and bill-risk trajectory."}
                         </p>
                       </div>
                     </div>
-                    <Progress value={0} />
+                    <Progress
+                      value={
+                        latestProjection?.next_slab_at &&
+                        latestProjection.current_usage
+                          ? Math.min(
+                              (latestProjection.current_usage /
+                                latestProjection.next_slab_at) *
+                                100,
+                              100
+                            )
+                          : 0
+                      }
+                    />
                   </CardContent>
                 </Card>
 
                 <Alert className="border-accent/30 bg-accent/10">
                   <Gauge className="size-4" />
-                  <AlertTitle>Ready for first capture</AlertTitle>
+                  <AlertTitle>
+                    {household
+                      ? `${household.state} / ${household.discom}`
+                      : "Ready for first capture"}
+                  </AlertTitle>
                   <AlertDescription>
-                    Connect state, Discom, and billing cycle before generating
-                    slab-aware advice.
+                    {latestReading?.error_message ??
+                      "Connect state, Discom, and billing cycle before generating slab-aware advice."}
                   </AlertDescription>
                 </Alert>
               </div>
@@ -319,19 +608,29 @@ export function DashboardShell() {
                     </div>
                   </div>
                   <div className="grid gap-3 md:grid-cols-3">
-                    <Button asChild className="h-12">
+                    <Button asChild className="h-12" disabled={isUploadingCapture}>
                       <label htmlFor="meter-photo-capture">
                         <Camera className="size-4" />
                         Take photo
                       </label>
                     </Button>
-                    <Button asChild variant="secondary" className="h-12">
+                    <Button
+                      asChild
+                      variant="secondary"
+                      className="h-12"
+                      disabled={isUploadingCapture}
+                    >
                       <label htmlFor="meter-video-capture">
                         <Video className="size-4" />
                         Record video
                       </label>
                     </Button>
-                    <Button asChild variant="outline" className="h-12">
+                    <Button
+                      asChild
+                      variant="outline"
+                      className="h-12"
+                      disabled={isUploadingCapture}
+                    >
                       <label htmlFor="meter-gallery-upload">
                         <Upload className="size-4" />
                         Upload gallery
@@ -344,7 +643,7 @@ export function DashboardShell() {
                     type="file"
                     accept="image/*"
                     capture="environment"
-                    onChange={(event) => handleCaptureFile(event.target.files?.[0])}
+                    onChange={(event) => void handleCaptureFile(event.target.files?.[0])}
                   />
                   <input
                     id="meter-video-capture"
@@ -352,23 +651,29 @@ export function DashboardShell() {
                     type="file"
                     accept="video/*"
                     capture="environment"
-                    onChange={(event) => handleCaptureFile(event.target.files?.[0])}
+                    onChange={(event) => void handleCaptureFile(event.target.files?.[0])}
                   />
                   <input
                     id="meter-gallery-upload"
                     className="hidden"
                     type="file"
                     accept="image/*,video/*"
-                    onChange={(event) => handleCaptureFile(event.target.files?.[0])}
+                    onChange={(event) => void handleCaptureFile(event.target.files?.[0])}
                   />
                   <Alert className="border-white/10 bg-white/5">
                     <ImageIcon className="size-4" />
                     <AlertTitle>
-                      {captureFileName ? "File ready for upload" : "Capture guidance"}
+                      {isUploadingCapture
+                        ? "Capture processing"
+                        : captureFileName
+                          ? "Latest capture"
+                          : "Capture guidance"}
                     </AlertTitle>
                     <AlertDescription>
-                      {captureFileName
-                        ? `${captureFileName} is selected. Next we will upload it to Supabase Storage and send it for AI extraction.`
+                      {captureStatus
+                        ? `${captureFileName ? `${captureFileName}: ` : ""}${captureStatus}`
+                        : captureFileName
+                          ? `${captureFileName} is selected.`
                         : "Use photo for a clear kWh display, video when the meter cycles through screens, or gallery upload for an existing clip."}
                     </AlertDescription>
                   </Alert>
@@ -388,27 +693,31 @@ export function DashboardShell() {
                         Savings plan
                       </CardTitle>
                     </div>
-                    <Badge variant="secondary">Pending</Badge>
+                    <Badge variant="secondary">
+                      {latestProjection?.advice_json ? "Ready" : "Pending"}
+                    </Badge>
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
                     <Sparkles className="mb-4 size-5 text-accent" />
                     <h3 className="text-xl font-extrabold">
-                      No advice generated yet.
+                      {latestProjection?.advice_json?.title ??
+                        "No advice generated yet."}
                     </h3>
                     <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                      Once a meter reading is processed, ShockProof will show
-                      clear household actions, projected savings, and slab-risk
-                      warnings here.
+                      {latestProjection?.advice_json?.message ??
+                        "Once a meter reading is processed, ShockProof will show clear household actions, projected savings, and slab-risk warnings here."}
                     </p>
                   </div>
                   <div className="grid gap-3">
-                    {[
-                      "Advice will appear after the first meter reading",
-                      "Savings actions will use selected Discom rules",
-                      "Follow-up reminder will use the billing cycle date",
-                    ].map((item) => (
+                    {(
+                      latestProjection?.advice_json?.actions ?? [
+                        "Advice will appear after the first meter reading",
+                        "Savings actions will use selected Discom rules",
+                        "Follow-up reminder will use the billing cycle date",
+                      ]
+                    ).map((item) => (
                       <label
                         key={item}
                         className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3 text-sm font-semibold text-muted-foreground"

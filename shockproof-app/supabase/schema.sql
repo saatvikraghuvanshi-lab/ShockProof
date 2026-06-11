@@ -33,7 +33,7 @@ create table if not exists public.meter_readings (
   reading_kwh numeric,
   confidence numeric check (confidence is null or (confidence >= 0 and confidence <= 1)),
   display_type text,
-  status text not null default 'draft' check (status in ('draft', 'uploading', 'processing', 'completed', 'failed')),
+  status text not null default 'draft' check (status in ('draft', 'uploading', 'uploaded', 'processing', 'processed', 'failed')),
   captured_at timestamptz not null default now(),
   processed_at timestamptz,
   error_message text,
@@ -58,11 +58,13 @@ create table if not exists public.tariff_slabs (
 create table if not exists public.reading_projections (
   id uuid primary key default gen_random_uuid(),
   reading_id uuid not null references public.meter_readings(id) on delete cascade,
+  current_usage numeric,
   projected_units numeric,
   next_slab_at numeric,
   units_to_next_slab numeric,
   estimated_bill numeric,
   estimated_delta numeric,
+  bill_risk text check (bill_risk is null or bill_risk in ('low', 'medium', 'high')),
   advice_json jsonb,
   created_at timestamptz not null default now()
 );
