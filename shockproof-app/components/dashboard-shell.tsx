@@ -177,6 +177,8 @@ const defaultPermissionPreferences: PermissionPreferences = {
   aiAdvice: true,
 };
 
+const estimatedUsdToInrRate = 95.42;
+
 const defaultStoredSettings: StoredSettings = {
   selectedState: "",
   selectedDiscom: "",
@@ -238,8 +240,18 @@ function formatReadingDate(value?: string | null) {
   });
 }
 
-function formatCost(value: number) {
-  return `$${value.toFixed(value >= 0.01 ? 2 : 5)}`;
+function formatRupeeCost(valueUsd: number) {
+  const valueInr = valueUsd * estimatedUsdToInrRate;
+
+  if (valueInr > 0 && valueInr < 0.01) {
+    return `₹${valueInr.toFixed(4)}`;
+  }
+
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    maximumFractionDigits: valueInr >= 1 ? 2 : 4,
+  }).format(valueInr);
 }
 
 export function DashboardShell() {
@@ -965,65 +977,6 @@ export function DashboardShell() {
                 ))}
               </div>
 
-              <Card className="border-white/10 bg-card/70">
-                <CardHeader>
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <CardDescription>Saved readings</CardDescription>
-                      <CardTitle className="text-2xl font-extrabold">
-                        History
-                      </CardTitle>
-                    </div>
-                    <History className="size-5 text-muted-foreground" />
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {readingHistory.length > 0 ? (
-                    readingHistory.map((reading) => (
-                      <div
-                        key={reading.id}
-                        className="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-4 sm:flex-row sm:items-center sm:justify-between"
-                      >
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="font-bold">
-                              {reading.reading_kwh
-                                ? `${Math.round(reading.reading_kwh)} kWh`
-                                : "Pending OCR"}
-                            </p>
-                            <Badge variant="secondary">{reading.status}</Badge>
-                          </div>
-                          <p className="mt-1 truncate text-sm text-muted-foreground">
-                            {formatReadingDate(reading.created_at)} -{" "}
-                            {reading.ai_notes ??
-                              reading.error_message ??
-                              reading.storage_path}
-                          </p>
-                        </div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="gap-2 text-muted-foreground hover:text-destructive sm:w-auto"
-                          disabled={deletingReadingId === reading.id}
-                          onClick={() => void deleteReading(reading.id)}
-                        >
-                          {deletingReadingId === reading.id ? (
-                            <LoaderCircle className="size-4 animate-spin" />
-                          ) : (
-                            <Trash2 className="size-4" />
-                          )}
-                          Delete
-                        </Button>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="rounded-xl border border-white/10 bg-white/5 p-4 text-sm font-medium text-muted-foreground">
-                      No saved readings yet.
-                    </p>
-                  )}
-                </CardContent>
-              </Card>
             </section>
             ) : null}
 
@@ -1292,8 +1245,8 @@ export function DashboardShell() {
                         ],
                         [
                           "Estimate",
-                          formatCost(usageSummary.estimatedCostUsd),
-                          "not billing balance",
+                          formatRupeeCost(usageSummary.estimatedCostUsd),
+                          `approx at ₹${estimatedUsdToInrRate}/USD`,
                         ],
                       ].map(([label, value, hint]) => (
                         <div
@@ -1327,13 +1280,72 @@ export function DashboardShell() {
                               </p>
                             </div>
                             <p className="font-bold">
-                              {formatCost(event.estimated_cost_usd ?? 0)}
+                              {formatRupeeCost(event.estimated_cost_usd ?? 0)}
                             </p>
                           </div>
                         ))
                       ) : (
                         <p className="rounded-xl border border-white/10 bg-white/5 p-4 text-sm font-medium text-muted-foreground">
                           Usage appears here after OCR or advice calls.
+                        </p>
+                      )}
+                    </div>
+                  </section>
+
+                  <section className="grid gap-3">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <h3 className="text-xl font-bold">Reading history</h3>
+                        <p className="text-sm text-muted-foreground">
+                          Uploaded captures, OCR results, manual corrections,
+                          and failed attempts.
+                        </p>
+                      </div>
+                      <History className="size-5 text-muted-foreground" />
+                    </div>
+                    <div className="grid gap-3">
+                      {readingHistory.length > 0 ? (
+                        readingHistory.map((reading) => (
+                          <div
+                            key={reading.id}
+                            className="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-4 sm:flex-row sm:items-center sm:justify-between"
+                          >
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="font-bold">
+                                  {reading.reading_kwh
+                                    ? `${Math.round(reading.reading_kwh)} kWh`
+                                    : "Pending OCR"}
+                                </p>
+                                <Badge variant="secondary">{reading.status}</Badge>
+                              </div>
+                              <p className="mt-1 truncate text-sm text-muted-foreground">
+                                {formatReadingDate(reading.created_at)} -{" "}
+                                {reading.ai_notes ??
+                                  reading.error_message ??
+                                  reading.storage_path}
+                              </p>
+                            </div>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="gap-2 text-muted-foreground hover:text-destructive sm:w-auto"
+                              disabled={deletingReadingId === reading.id}
+                              onClick={() => void deleteReading(reading.id)}
+                            >
+                              {deletingReadingId === reading.id ? (
+                                <LoaderCircle className="size-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="size-4" />
+                              )}
+                              Delete
+                            </Button>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="rounded-xl border border-white/10 bg-white/5 p-4 text-sm font-medium text-muted-foreground">
+                          No saved readings yet.
                         </p>
                       )}
                     </div>
@@ -1520,6 +1532,83 @@ export function DashboardShell() {
                         ))}
                       </SelectContent>
                     </Select>
+                  </section>
+
+                  <section className="grid gap-3">
+                    <div>
+                      <h3 className="text-xl font-bold">First-time guide</h3>
+                      <p className="text-sm text-muted-foreground">
+                        Set up the tariff context first, then add secure device
+                        access after the account is working.
+                      </p>
+                    </div>
+                    <div className="grid gap-3 lg:grid-cols-2">
+                      <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+                        <p className="font-bold">1. Match your electricity bill</p>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          Select the state, Discom, billing cycle, and language
+                          used at home. This is what later projections and slab
+                          warnings will use.
+                        </p>
+                      </div>
+                      <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+                        <p className="font-bold">2. Capture the meter display</p>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          Use a sharp photo when the kWh display is visible.
+                          Use video only when the meter cycles between screens.
+                        </p>
+                      </div>
+                      <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+                        <p className="font-bold">3. Review OCR before trusting it</p>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          If Gemini is unsure or mistakes a date for a reading,
+                          save the correct kWh manually from the Capture tab.
+                        </p>
+                      </div>
+                      <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+                        <p className="font-bold">4. Watch slab risk and advice</p>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          Once readings and tariff rules are connected,
+                          ShockProof can compare current usage with the billing
+                          cycle and warn before slab jumps.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+                      <p className="font-bold">Passkeys by device</p>
+                      <div className="mt-3 grid gap-3 md:grid-cols-2">
+                        {[
+                          [
+                            "Windows laptop",
+                            "Use Windows Hello with fingerprint, face unlock, or device PIN.",
+                          ],
+                          [
+                            "Android phone",
+                            "Use screen lock, fingerprint, or face unlock from the signed-in browser.",
+                          ],
+                          [
+                            "iPhone or iPad",
+                            "Use Face ID, Touch ID, or device passcode. iCloud Keychain can sync it.",
+                          ],
+                          [
+                            "Mac",
+                            "Use Touch ID or the Mac password. iCloud Keychain can sync it.",
+                          ],
+                        ].map(([device, guidance]) => (
+                          <div key={device}>
+                            <p className="text-sm font-bold">{device}</p>
+                            <p className="text-sm text-muted-foreground">
+                              {guidance}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="mt-3 text-sm text-muted-foreground">
+                        Add the passkey from this signed-in browser. On the next
+                        login, use Continue with passkey on the same device or a
+                        synced device.
+                      </p>
+                    </div>
                   </section>
 
                   <div className="grid gap-3">
