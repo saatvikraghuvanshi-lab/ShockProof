@@ -48,9 +48,15 @@ function calculateBill(units: number, slabs: TariffSlab[]) {
     return 0;
   }
 
-  const fixedCharge = Math.max(
-    ...slabs.map((slab) => toNumber(slab.fixed_charge))
-  );
+  const fixedChargeSlab =
+    slabs.find((slab) => {
+      const start = toNumber(slab.slab_start);
+      const end =
+        slab.slab_end === null ? Number.POSITIVE_INFINITY : toNumber(slab.slab_end);
+
+      return units > start && units <= end;
+    }) ?? slabs[slabs.length - 1];
+  const fixedCharge = toNumber(fixedChargeSlab.fixed_charge);
 
   const usageCharge = slabs.reduce((total, slab) => {
     const start = toNumber(slab.slab_start);

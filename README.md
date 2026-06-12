@@ -110,6 +110,14 @@ SQL setup files live in:
 shockproof-app/supabase/
 ```
 
+Recommended production SQL order:
+
+```text
+minimal-capture-next.sql
+tariff-slabs-rajasthan-2025.sql
+production-security-policies.sql
+```
+
 For production auth, configure Supabase with:
 
 ```text
@@ -171,11 +179,14 @@ Implemented:
 - Gemini OCR processing
 - projection calculation
 - Gemini advice generation
+- verified Rajasthan tariff seed data for JVVNL, AVVNL, and JdVVNL
 - model usage display
 - reading history
 - capture delete and manual correction fallback
 - Vercel deployment
-- add verified tariff slabs for target Indian DISCOMs
-- improve production RLS and storage policies
-- add user-friendly error screens for provider/API failures
+
+Next priorities:
+
 - add usage caps before wider public testing
+- add more verified tariff slabs beyond Rajasthan
+- add automated end-to-end tests for production smoke checks

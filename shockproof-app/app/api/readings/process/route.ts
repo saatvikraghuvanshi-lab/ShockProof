@@ -8,6 +8,7 @@ import {
   calculateProjection,
   type TariffSlab,
 } from "@/lib/billing-projections";
+import { getPublicErrorMessage } from "@/lib/public-errors";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -493,30 +494,45 @@ export async function POST(request: Request) {
     if (settings?.allowAdvice !== false) {
       const adviceModel =
         process.env.GEMINI_ADVICE_MODEL ?? "gemini-3.1-flash-lite";
-      const advice = await generateGeminiJsonWithUsage<AdviceResult>({
-        model: adviceModel,
-        parts: [
-          {
-            text: getAdvicePrompt({
-              projection,
-              state: settings?.state,
-              discom: settings?.discom,
-              language: settings?.language,
-              useHinglish: settings?.useHinglish,
-              tariffSource,
-            }),
-          },
-        ],
-      });
-      adviceJson = advice.data;
-      await recordUsage({
-        admin,
-        userId: user.id,
-        readingId: reading.id,
-        model: adviceModel,
-        purpose: "household_advice",
-        usage: advice.usage,
-      });
+      try {
+        const advice = await generateGeminiJsonWithUsage<AdviceResult>({
+          model: adviceModel,
+          parts: [
+            {
+              text: getAdvicePrompt({
+                projection,
+                state: settings?.state,
+                discom: settings?.discom,
+                language: settings?.language,
+                useHinglish: settings?.useHinglish,
+                tariffSource,
+              }),
+            },
+          ],
+        });
+        adviceJson = advice.data;
+        await recordUsage({
+          admin,
+          userId: user.id,
+          readingId: reading.id,
+          model: adviceModel,
+          purpose: "household_advice",
+          usage: advice.usage,
+        });
+      } catch (error) {
+        adviceJson = {
+          summary: "Projection is ready, but AI advice is temporarily unavailable.",
+          actions: [
+            `At the current pace, projected usage is ${projection.projectedUnits} kWh.`,
+            projection.unitsToNextSlab === null
+              ? "You are already in the final configured slab, so reduce heavy loads during peak household hours."
+              : `You are ${projection.unitsToNextSlab} kWh away from the next slab.`,
+            "Reduce evening AC, geyser, pump, or ironing use until advice generation is restored.",
+          ],
+          risk_note: getPublicErrorMessage(error),
+          assumptions: ["Gemini advice generation failed after OCR and projection succeeded."],
+        };
+      }
     }
 
     await admin
@@ -559,12 +575,17 @@ export async function POST(request: Request) {
       previous_reading_kwh: previousReadingKwh,
     });
   } catch (error) {
-    const message =
+    const internalMessage =
       error instanceof Error ? error.message : "Processing failed.";
+    const message = getPublicErrorMessage(error);
 
     await admin
       .from("meter_readings")
-      .update({ status: "failed", error_message: message })
+      .update({
+        status: "failed",
+        error_message: message,
+        ai_notes: internalMessage === message ? null : internalMessage,
+      })
       .eq("id", reading.id);
 
     return NextResponse.json({ error: message }, { status: 500 });

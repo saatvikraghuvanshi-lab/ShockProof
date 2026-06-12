@@ -8,6 +8,7 @@ import {
   type GeminiUsage,
   generateGeminiJsonWithUsage,
 } from "@/lib/gemini";
+import { getPublicErrorMessage } from "@/lib/public-errors";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -284,30 +285,45 @@ export async function PATCH(request: Request, context: RouteContext) {
   if (body.settings?.allowAdvice !== false) {
     const adviceModel =
       process.env.GEMINI_ADVICE_MODEL ?? "gemini-3.1-flash-lite";
-    const advice = await generateGeminiJsonWithUsage<AdviceResult>({
-      model: adviceModel,
-      parts: [
-        {
-          text: getAdvicePrompt({
-            projection,
-            state: body.settings?.state,
-            discom: body.settings?.discom,
-            language: body.settings?.language,
-            useHinglish: body.settings?.useHinglish,
-            tariffSource,
-          }),
-        },
-      ],
-    });
-    adviceJson = advice.data;
-    await recordUsage({
-      admin,
-      userId: user.id,
-      readingId: reading.id,
-      model: adviceModel,
-      purpose: "manual_reading_advice",
-      usage: advice.usage,
-    });
+    try {
+      const advice = await generateGeminiJsonWithUsage<AdviceResult>({
+        model: adviceModel,
+        parts: [
+          {
+            text: getAdvicePrompt({
+              projection,
+              state: body.settings?.state,
+              discom: body.settings?.discom,
+              language: body.settings?.language,
+              useHinglish: body.settings?.useHinglish,
+              tariffSource,
+            }),
+          },
+        ],
+      });
+      adviceJson = advice.data;
+      await recordUsage({
+        admin,
+        userId: user.id,
+        readingId: reading.id,
+        model: adviceModel,
+        purpose: "manual_reading_advice",
+        usage: advice.usage,
+      });
+    } catch (error) {
+      adviceJson = {
+        summary: "Projection is ready, but AI advice is temporarily unavailable.",
+        actions: [
+          `At the current pace, projected usage is ${projection.projectedUnits} kWh.`,
+          projection.unitsToNextSlab === null
+            ? "You are already in the final configured slab, so reduce heavy loads during peak household hours."
+            : `You are ${projection.unitsToNextSlab} kWh away from the next slab.`,
+          "Reduce evening AC, geyser, pump, or ironing use until advice generation is restored.",
+        ],
+        risk_note: getPublicErrorMessage(error),
+        assumptions: ["Gemini advice generation failed after manual correction and projection succeeded."],
+      };
+    }
   }
 
   const { error: updateError } = await admin
@@ -338,7 +354,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     .eq("id", reading.id);
 
   if (updateError) {
-    return NextResponse.json({ error: updateError.message }, { status: 500 });
+    return NextResponse.json({ error: getPublicErrorMessage(updateError) }, { status: 500 });
   }
 
   return NextResponse.json({
@@ -398,7 +414,7 @@ export async function DELETE(_request: Request, context: RouteContext) {
     .eq("id", reading.id);
 
   if (deleteError) {
-    return NextResponse.json({ error: deleteError.message }, { status: 500 });
+    return NextResponse.json({ error: getPublicErrorMessage(deleteError) }, { status: 500 });
   }
 
   return NextResponse.json({ ok: true });
