@@ -26,16 +26,10 @@ export async function generateGeminiJson<T>({
   model: string;
   parts: GeminiPart[];
 }): Promise<T> {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
 
   if (!apiKey) {
     throw new Error("Missing GEMINI_API_KEY.");
-  }
-
-  if (!apiKey.startsWith("AIza")) {
-    throw new Error(
-      "GEMINI_API_KEY is set, but it does not look like a Google AI Studio API key. Create an API key in Google AI Studio and paste that value into .env.local."
-    );
   }
 
   const response = await fetch(
@@ -61,7 +55,12 @@ export async function generateGeminiJson<T>({
   const payload = (await response.json()) as GeminiResponse;
 
   if (!response.ok) {
-    throw new Error(payload.error?.message ?? "Gemini request failed.");
+    const message = payload.error?.message ?? "Gemini request failed.";
+    throw new Error(
+      response.status === 401
+        ? `${message} Check that GEMINI_API_KEY is copied from Google AI Studio, not expired/deleted, and that the project can access the Gemini API.`
+        : message
+    );
   }
 
   const text = payload.candidates?.[0]?.content?.parts?.[0]?.text;
