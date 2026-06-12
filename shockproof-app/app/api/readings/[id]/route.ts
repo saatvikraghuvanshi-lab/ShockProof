@@ -185,6 +185,10 @@ function getAdvicePrompt({
     "Generate concise household electricity-saving advice for ShockProof.",
     "Return strict JSON only with summary, actions, risk_note, and assumptions.",
     "Keep actions practical and specific for a household.",
+    "The summary must mention the projected month-end usage and bill risk.",
+    "The risk_note must mention units_to_next_slab when available, for example: You are 18 kWh away from the next slab.",
+    "At least one action must reference the user's pace, for example: At the current pace you may cross X units.",
+    "At least one action must be a concrete household load action, for example reducing evening AC, geyser, heater, pump, or ironing usage.",
     "Do not invent tariff amounts. If slab data is fallback/estimated, say the advice is provisional.",
     `Language style: ${useHinglish ? "Hinglish" : language || "English"}.`,
     `State: ${state || "not selected"}. Discom: ${discom || "not selected"}. Tariff source: ${tariffSource}.`,
@@ -202,16 +206,12 @@ export async function PATCH(request: Request, context: RouteContext) {
   const readingId = String(id ?? "").trim();
   const body = (await request.json()) as {
     reading_kwh?: number | string;
+    confirm_reading?: boolean;
     settings?: ReadingSettings;
   };
-  const readingKwh = parseKwhInput(body.reading_kwh);
 
   if (!readingId) {
     return NextResponse.json({ error: "Valid reading id is required." }, { status: 400 });
-  }
-
-  if (readingKwh === null) {
-    return NextResponse.json({ error: "Valid reading_kwh is required." }, { status: 400 });
   }
 
   const supabase = await createClient();
@@ -227,12 +227,39 @@ export async function PATCH(request: Request, context: RouteContext) {
 
   const { data: reading, error: readingError } = await admin
     .from("meter_readings")
-    .select("id, user_id")
+    .select("id, user_id, ai_notes")
     .eq("id", readingId)
     .single();
 
   if (readingError || !reading || reading.user_id !== user.id) {
     return NextResponse.json({ error: "Reading not found." }, { status: 404 });
+  }
+
+  if (body.confirm_reading) {
+    const existingNotes = String(reading.ai_notes ?? "").trim();
+    const confirmedNote = existingNotes.includes("Confirmed by user.")
+      ? existingNotes
+      : [existingNotes, "Confirmed by user."].filter(Boolean).join(" ");
+    const { error: confirmError } = await admin
+      .from("meter_readings")
+      .update({
+        ai_notes: confirmedNote,
+        error_message: null,
+        status: "processed",
+      })
+      .eq("id", reading.id);
+
+    if (confirmError) {
+      return NextResponse.json({ error: confirmError.message }, { status: 500 });
+    }
+
+    return NextResponse.json({ ok: true, confirmed: true });
+  }
+
+  const readingKwh = parseKwhInput(body.reading_kwh);
+
+  if (readingKwh === null) {
+    return NextResponse.json({ error: "Valid reading_kwh is required." }, { status: 400 });
   }
 
   const previousReadingKwh = await loadPreviousReading({

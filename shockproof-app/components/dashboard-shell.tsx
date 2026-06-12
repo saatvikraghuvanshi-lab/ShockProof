@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Camera,
+  CheckCircle2,
   ChevronDown,
   Cpu,
   Fingerprint,
@@ -16,6 +17,7 @@ import {
   LayoutDashboard,
   LoaderCircle,
   LogOut,
+  PencilLine,
   Settings,
   Sparkles,
   Trash2,
@@ -400,6 +402,8 @@ export function DashboardShell() {
   const [activeTab, setActiveTab] = useState<AppTab>("dashboard");
   const [isUploadingCapture, setIsUploadingCapture] = useState(false);
   const [deletingReadingId, setDeletingReadingId] = useState<ReadingId | null>(null);
+  const [isConfirmingReading, setIsConfirmingReading] = useState(false);
+  const [isEditingManualReading, setIsEditingManualReading] = useState(false);
   const [isSavingManualReading, setIsSavingManualReading] = useState(false);
   const [isPasskeyPending, setIsPasskeyPending] = useState(false);
   const [passkeyStatus, setPasskeyStatus] = useState("");
@@ -417,11 +421,14 @@ export function DashboardShell() {
     hasProjection &&
     permissionPreferences.aiAdvice &&
     !!latestReading.advice_json?.summary;
+  const latestReadingConfirmed = latestReading?.ai_notes
+    ?.toLowerCase()
+    .includes("confirmed by user");
 
   const metrics = useMemo(
     () => [
       [
-        "Current",
+        "Current usage",
         hasCleanProcessedReading
           ? `${Math.round(latestReading.current_usage ?? latestReading.reading_kwh ?? 0)} kWh`
           : "-- kWh",
@@ -432,7 +439,7 @@ export function DashboardShell() {
             : "Waiting for first meter read",
       ],
       [
-        "Projected",
+        "Month-end projection",
         hasProjection ? `${Math.round(latestReading.projected_units ?? 0)} kWh` : "--",
         hasProjection
           ? "estimated by billing-cycle pace"
@@ -450,23 +457,16 @@ export function DashboardShell() {
           : "needs tariff slabs",
       ],
       [
-        "Status",
-        latestReadingNeedsReview
-          ? "needs review"
-          : hasAdvice
-            ? "advice ready"
-            : latestReading?.status ?? "Ready",
-        latestReadingNeedsReview
-          ? "OCR looked date-like; correct it manually in Capture."
-          : hasAdvice
-            ? latestReading.advice_json?.summary ?? "Advice generated."
-            : latestReading?.error_message ??
-              latestReading?.ai_notes ??
-              latestReading?.storage_path ??
-              "Start with meter capture",
+        "Estimated bill risk",
+        hasProjection ? latestReading.bill_risk ?? "low" : "--",
+        hasProjection
+          ? latestReading.estimated_bill !== null
+            ? `estimated bill INR ${Math.round(latestReading.estimated_bill).toLocaleString("en-IN")}`
+            : "risk calculated from slab distance"
+          : "needs OCR and tariff setup",
       ],
     ],
-    [hasAdvice, hasCleanProcessedReading, hasProjection, latestReading, latestReadingNeedsReview]
+    [hasCleanProcessedReading, hasProjection, latestReading]
   );
 
   const loadLatestReading = useCallback(async (currentUserId: string) => {
@@ -787,6 +787,46 @@ export function DashboardShell() {
     await loadLatestReading(userId);
   }
 
+  async function confirmReading(readingId: ReadingId) {
+    if (!userId) {
+      return;
+    }
+
+    setIsConfirmingReading(true);
+    setCaptureStatus("");
+
+    const response = await fetch(`/api/readings/${readingId}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ confirm_reading: true }),
+    });
+    const payload = await response.json();
+
+    setIsConfirmingReading(false);
+
+    if (!response.ok) {
+      setCaptureStatus(payload.error ?? "Could not confirm reading.");
+      return;
+    }
+
+    setCaptureStatus("Reading confirmed.");
+    setLatestReading((current) =>
+      current?.id === readingId
+        ? {
+            ...current,
+            ai_notes: current.ai_notes?.includes("Confirmed by user.")
+              ? current.ai_notes
+              : [current.ai_notes, "Confirmed by user."]
+                  .filter(Boolean)
+                  .join(" "),
+          }
+        : current
+    );
+    await loadLatestReading(userId);
+  }
+
   async function saveManualReading(readingId: ReadingId) {
     if (!userId) {
       return;
@@ -831,6 +871,7 @@ export function DashboardShell() {
     }
 
     setManualReading("");
+    setIsEditingManualReading(false);
     setCaptureStatus(
       `Saved ${payload.reading_kwh} kWh manually${
         payload.advice ? " with projection + advice" : ""
@@ -846,6 +887,7 @@ export function DashboardShell() {
 
     setCaptureFileName(file.name);
     setCaptureStatus("");
+    setIsEditingManualReading(false);
 
     if (!userId) {
       setCaptureStatus("Account session is still loading. Try again in a moment.");
@@ -1334,13 +1376,83 @@ export function DashboardShell() {
                     </AlertDescription>
                   </Alert>
                   {latestReading ? (
+                    <div className="grid gap-3 rounded-xl border border-white/10 bg-white/5 p-4 md:grid-cols-[1fr_auto] md:items-center">
+                      <div className="min-w-0">
+                        <p className="font-bold">
+                          {hasCleanProcessedReading
+                            ? `${Math.round(latestReading.reading_kwh ?? 0)} kWh detected`
+                            : latestReading.status === "failed"
+                              ? "OCR needs correction"
+                              : "Capture saved"}
+                        </p>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          {latestReadingConfirmed
+                            ? "You marked this reading as correct."
+                            : hasCleanProcessedReading
+                              ? "Confirm it, edit it if Gemini misread the display, or delete the capture."
+                              : "Edit the reading manually if OCR cannot finish."}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {hasCleanProcessedReading ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="gap-2"
+                            disabled={isConfirmingReading || latestReadingConfirmed}
+                            onClick={() => void confirmReading(latestReading.id)}
+                          >
+                            {isConfirmingReading ? (
+                              <LoaderCircle className="size-4 animate-spin" />
+                            ) : (
+                              <CheckCircle2 className="size-4" />
+                            )}
+                            {latestReadingConfirmed ? "Confirmed" : "Looks correct"}
+                          </Button>
+                        ) : null}
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          className="gap-2"
+                          onClick={() => setIsEditingManualReading((value) => !value)}
+                        >
+                          <PencilLine className="size-4" />
+                          Edit reading
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="gap-2"
+                          disabled={deletingReadingId === latestReading.id}
+                          onClick={() => void deleteReading(latestReading.id)}
+                        >
+                          {deletingReadingId === latestReading.id ? (
+                            <LoaderCircle className="size-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="size-4" />
+                          )}
+                          Delete capture
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
+                  {latestReading ? (
                     <details
                       className={cn(
                         "rounded-xl border border-white/10 bg-white/5 p-4",
                         (latestReadingNeedsReview || latestReading.status === "failed") &&
                           "border-amber-400/30 bg-amber-950/20"
                       )}
-                      open={latestReadingNeedsReview || latestReading.status === "failed"}
+                      open={
+                        isEditingManualReading ||
+                        latestReadingNeedsReview ||
+                        latestReading.status === "failed"
+                      }
+                      onToggle={(event) =>
+                        setIsEditingManualReading(event.currentTarget.open)
+                      }
                     >
                       <summary className="cursor-pointer text-sm font-bold">
                         Manual correction fallback
@@ -1368,25 +1480,6 @@ export function DashboardShell() {
                         </Button>
                       </div>
                     </details>
-                  ) : null}
-                  {latestReading ? (
-                    <div className="flex justify-end">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="gap-2"
-                        disabled={deletingReadingId === latestReading.id}
-                        onClick={() => void deleteReading(latestReading.id)}
-                      >
-                        {deletingReadingId === latestReading.id ? (
-                          <LoaderCircle className="size-4 animate-spin" />
-                        ) : (
-                          <Trash2 className="size-4" />
-                        )}
-                        Delete capture
-                      </Button>
-                    </div>
                   ) : null}
                 </CardContent>
               </Card>
@@ -1485,7 +1578,11 @@ export function DashboardShell() {
                   ],
                   [
                     "Postgres slabs",
-                    hasProjection ? "Calculated" : "Waiting",
+                    hasProjection
+                      ? latestReading.advice_json?.tariff_source === "fallback"
+                        ? "Fallback"
+                        : "Calculated"
+                      : "Waiting",
                     hasProjection
                       ? `${Math.round(latestReading.projected_units ?? 0)} kWh projected, ${latestReading.bill_risk ?? "low"} risk${
                           latestReading.advice_json?.tariff_source === "fallback"
@@ -1544,7 +1641,6 @@ export function DashboardShell() {
                     title="Model usage"
                     description="App-tracked Gemini calls and estimated spend."
                     icon={<Cpu className="size-5" />}
-                    defaultOpen
                   >
                     <div className="grid min-w-0 gap-3 sm:grid-cols-[repeat(2,minmax(0,1fr))] xl:grid-cols-[repeat(4,minmax(0,1fr))]">
                       {[
@@ -1664,7 +1760,6 @@ export function DashboardShell() {
                   <SettingsSection
                     title="User info"
                     description="Basic household details for account and bill context."
-                    defaultOpen
                   >
                     <div className="grid min-w-0 gap-3 sm:grid-cols-[repeat(2,minmax(0,1fr))]">
                       <Input
@@ -1714,7 +1809,6 @@ export function DashboardShell() {
                   <SettingsSection
                     title="Tariff location"
                     description="Select the state, Discom, and billing cycle printed on the electricity bill."
-                    defaultOpen
                   >
                     <div className="grid min-w-0 gap-3 sm:grid-cols-[repeat(2,minmax(0,1fr))] xl:grid-cols-[repeat(4,minmax(0,1fr))]">
                       <Select value={selectedState} onValueChange={setSelectedState}>
