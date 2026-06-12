@@ -55,7 +55,6 @@ ShockProof/
     supabase/             SQL setup files
 ```
 
-<img width="768" height="768" alt="Image" src="https://github.com/user-attachments/assets/8fefac7b-f416-4845-b410-231152a66b8e" />
 
 ## Local Development
 
@@ -176,9 +175,6 @@ Implemented:
 - reading history
 - capture delete and manual correction fallback
 - Vercel deployment
-
-Next priorities:
-
 - add verified tariff slabs for target Indian DISCOMs
 - improve production RLS and storage policies
 - add user-friendly error screens for provider/API failures
