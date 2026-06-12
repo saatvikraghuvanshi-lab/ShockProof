@@ -97,12 +97,39 @@ type UsageSummary = {
   recentEvents: UsageEvent[];
 };
 
-const permissions = [
-  ["Camera access", "Required for the 5-second smart meter capture flow."],
-  ["Notifications", "Needed for slab-jump alerts before the bill shock happens."],
-  ["Video upload", "Allows meter clips to be uploaded to secure storage for processing."],
-  ["AI advice", "Lets ShockProof generate localized savings guidance from tariff math."],
-];
+const featureLabels = {
+  slabJumpAlerts: [
+    "Slab jump alerts",
+    "Notify before projected usage crosses a tariff threshold.",
+  ],
+  hinglishAdvice: [
+    "Hinglish advice",
+    "Use simple, household-friendly AI recommendations.",
+  ],
+  realtimeDashboard: [
+    "Realtime dashboard",
+    "Refresh when processing status completes.",
+  ],
+} as const;
+
+const permissionLabels = {
+  cameraAccess: [
+    "Camera access",
+    "Required for the 5-second smart meter capture flow.",
+  ],
+  notifications: [
+    "Notifications",
+    "Needed for slab-jump alerts before the bill shock happens.",
+  ],
+  videoUpload: [
+    "Video upload",
+    "Allows meter clips to be uploaded to secure storage for processing.",
+  ],
+  aiAdvice: [
+    "AI advice",
+    "Lets ShockProof generate localized savings guidance from tariff math.",
+  ],
+} as const;
 
 const defaultSettingsDraft = {
   fullName: "",
@@ -118,6 +145,36 @@ type StoredSettings = {
   customCycleDay: string;
   selectedLanguage: string;
   settingsDraft: typeof defaultSettingsDraft;
+  featurePreferences: FeaturePreferences;
+  permissionPreferences: PermissionPreferences;
+};
+
+type FeaturePreferences = {
+  slabJumpAlerts: boolean;
+  hinglishAdvice: boolean;
+  realtimeDashboard: boolean;
+};
+
+type PermissionPreferences = {
+  cameraAccess: boolean;
+  notifications: boolean;
+  videoUpload: boolean;
+  aiAdvice: boolean;
+};
+
+type PermissionStatuses = Partial<Record<keyof PermissionPreferences, string>>;
+
+const defaultFeaturePreferences: FeaturePreferences = {
+  slabJumpAlerts: false,
+  hinglishAdvice: false,
+  realtimeDashboard: true,
+};
+
+const defaultPermissionPreferences: PermissionPreferences = {
+  cameraAccess: false,
+  notifications: false,
+  videoUpload: true,
+  aiAdvice: true,
 };
 
 const defaultStoredSettings: StoredSettings = {
@@ -127,6 +184,8 @@ const defaultStoredSettings: StoredSettings = {
   customCycleDay: "",
   selectedLanguage: "",
   settingsDraft: defaultSettingsDraft,
+  featurePreferences: defaultFeaturePreferences,
+  permissionPreferences: defaultPermissionPreferences,
 };
 
 function readStoredSettings(): StoredSettings {
@@ -152,6 +211,14 @@ function readStoredSettings(): StoredSettings {
       settingsDraft: {
         ...defaultSettingsDraft,
         ...parsed.settingsDraft,
+      },
+      featurePreferences: {
+        ...defaultFeaturePreferences,
+        ...parsed.featurePreferences,
+      },
+      permissionPreferences: {
+        ...defaultPermissionPreferences,
+        ...parsed.permissionPreferences,
       },
     };
   } catch {
@@ -208,6 +275,14 @@ export function DashboardShell() {
   const [settingsDraft, setSettingsDraft] = useState(
     initialSettings.settingsDraft
   );
+  const [featurePreferences, setFeaturePreferences] = useState(
+    initialSettings.featurePreferences
+  );
+  const [permissionPreferences, setPermissionPreferences] = useState(
+    initialSettings.permissionPreferences
+  );
+  const [permissionStatuses, setPermissionStatuses] =
+    useState<PermissionStatuses>({});
   const [captureFileName, setCaptureFileName] = useState("");
   const [captureStatus, setCaptureStatus] = useState("");
   const [manualReading, setManualReading] = useState("");
@@ -346,10 +421,14 @@ export function DashboardShell() {
         customCycleDay,
         selectedLanguage,
         settingsDraft,
+        featurePreferences,
+        permissionPreferences,
       })
     );
   }, [
     customCycleDay,
+    featurePreferences,
+    permissionPreferences,
     selectedBillingCycle,
     selectedDiscom,
     selectedLanguage,
@@ -358,7 +437,7 @@ export function DashboardShell() {
   ]);
 
   useEffect(() => {
-    if (!userId) {
+    if (!userId || !featurePreferences.realtimeDashboard) {
       return;
     }
 
@@ -380,7 +459,7 @@ export function DashboardShell() {
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [loadLatestReading, userId]);
+  }, [featurePreferences.realtimeDashboard, loadLatestReading, userId]);
 
   async function signOut() {
     const supabase = createClient();
@@ -388,6 +467,137 @@ export function DashboardShell() {
     await supabase.auth.signOut();
     router.replace("/login");
     router.refresh();
+  }
+
+  function setFeaturePreference(
+    key: keyof FeaturePreferences,
+    checked: boolean
+  ) {
+    setFeaturePreferences((preferences) => ({
+      ...preferences,
+      [key]: checked,
+    }));
+
+    if (key === "hinglishAdvice" && checked) {
+      setSelectedLanguage("Hinglish");
+    }
+  }
+
+  function setPermissionPreference(
+    key: keyof PermissionPreferences,
+    checked: boolean
+  ) {
+    setPermissionPreferences((preferences) => ({
+      ...preferences,
+      [key]: checked,
+    }));
+  }
+
+  function setPermissionStatus(
+    key: keyof PermissionPreferences,
+    message: string
+  ) {
+    setPermissionStatuses((statuses) => ({
+      ...statuses,
+      [key]: message,
+    }));
+  }
+
+  async function toggleSlabAlerts(checked: boolean) {
+    setFeaturePreference("slabJumpAlerts", checked);
+
+    if (checked && !("Notification" in window)) {
+      setFeaturePreference("slabJumpAlerts", false);
+      setPermissionStatus(
+        "notifications",
+        "Notifications are not available in this browser, so slab alerts are off."
+      );
+      return;
+    }
+
+    if (checked) {
+      const permission = await Notification.requestPermission();
+
+      if (permission === "granted") {
+        setPermissionPreference("notifications", true);
+        setPermissionStatus("notifications", "Browser notifications enabled.");
+        return;
+      }
+
+      setFeaturePreference("slabJumpAlerts", false);
+      setPermissionPreference("notifications", false);
+      setPermissionStatus(
+        "notifications",
+        "Notification permission was not granted, so slab alerts are off."
+      );
+    }
+  }
+
+  async function toggleCameraAccess(checked: boolean) {
+    if (!checked) {
+      setPermissionPreference("cameraAccess", false);
+      setPermissionStatus("cameraAccess", "Camera capture disabled.");
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setPermissionStatus("cameraAccess", "Camera access is not available in this browser.");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
+      });
+
+      stream.getTracks().forEach((track) => track.stop());
+      setPermissionPreference("cameraAccess", true);
+      setPermissionStatus("cameraAccess", "Camera permission granted.");
+    } catch {
+      setPermissionPreference("cameraAccess", false);
+      setPermissionStatus("cameraAccess", "Camera permission was blocked or cancelled.");
+    }
+  }
+
+  async function toggleNotifications(checked: boolean) {
+    if (!checked) {
+      setPermissionPreference("notifications", false);
+      setFeaturePreference("slabJumpAlerts", false);
+      setPermissionStatus("notifications", "Notifications disabled.");
+      return;
+    }
+
+    if (!("Notification" in window)) {
+      setPermissionStatus("notifications", "Notifications are not available in this browser.");
+      return;
+    }
+
+    const permission = await Notification.requestPermission();
+
+    if (permission === "granted") {
+      setPermissionPreference("notifications", true);
+      setPermissionStatus("notifications", "Browser notifications enabled.");
+      return;
+    }
+
+    setPermissionPreference("notifications", false);
+    setPermissionStatus("notifications", "Notification permission was blocked or dismissed.");
+  }
+
+  function toggleVideoUpload(checked: boolean) {
+    setPermissionPreference("videoUpload", checked);
+    setPermissionStatus(
+      "videoUpload",
+      checked ? "Photo and video uploads enabled." : "Video uploads disabled; photos still work."
+    );
+  }
+
+  function toggleAiAdvice(checked: boolean) {
+    setPermissionPreference("aiAdvice", checked);
+    setPermissionStatus(
+      "aiAdvice",
+      checked ? "AI advice generation enabled." : "AI advice generation disabled."
+    );
   }
 
   async function registerPasskey() {
@@ -489,6 +699,11 @@ export function DashboardShell() {
 
     if (!file.type.startsWith("image/") && !file.type.startsWith("video/")) {
       setCaptureStatus("Choose an image or video meter capture.");
+      return;
+    }
+
+    if (file.type.startsWith("video/") && !permissionPreferences.videoUpload) {
+      setCaptureStatus("Video upload is disabled in Settings. Use a photo or turn video upload back on.");
       return;
     }
 
@@ -834,8 +1049,18 @@ export function DashboardShell() {
                     </div>
                   </div>
                   <div className="grid gap-3 md:grid-cols-3">
-                    <Button asChild className="h-12" disabled={isUploadingCapture}>
-                      <label htmlFor="meter-photo-capture">
+                    <Button
+                      asChild
+                      className="h-12"
+                      disabled={isUploadingCapture || !permissionPreferences.cameraAccess}
+                    >
+                      <label
+                        htmlFor={
+                          permissionPreferences.cameraAccess
+                            ? "meter-photo-capture"
+                            : undefined
+                        }
+                      >
                         <Camera className="size-4" />
                         Take photo
                       </label>
@@ -844,9 +1069,15 @@ export function DashboardShell() {
                       asChild
                       variant="secondary"
                       className="h-12"
-                      disabled={isUploadingCapture}
+                      disabled={isUploadingCapture || !permissionPreferences.videoUpload}
                     >
-                      <label htmlFor="meter-video-capture">
+                      <label
+                        htmlFor={
+                          permissionPreferences.videoUpload
+                            ? "meter-video-capture"
+                            : undefined
+                        }
+                      >
                         <Video className="size-4" />
                         Record video
                       </label>
@@ -869,6 +1100,7 @@ export function DashboardShell() {
                     type="file"
                     accept="image/*"
                     capture="environment"
+                    disabled={!permissionPreferences.cameraAccess}
                     onChange={(event) => void handleCaptureFile(event.target.files?.[0])}
                   />
                   <input
@@ -877,13 +1109,18 @@ export function DashboardShell() {
                     type="file"
                     accept="video/*"
                     capture="environment"
+                    disabled={!permissionPreferences.videoUpload}
                     onChange={(event) => void handleCaptureFile(event.target.files?.[0])}
                   />
                   <input
                     id="meter-gallery-upload"
                     className="hidden"
                     type="file"
-                    accept="image/*,video/*"
+                    accept={
+                      permissionPreferences.videoUpload
+                        ? "image/*,video/*"
+                        : "image/*"
+                    }
                     onChange={(event) => void handleCaptureFile(event.target.files?.[0])}
                   />
                   <Alert className="border-white/10 bg-white/5">
@@ -900,7 +1137,9 @@ export function DashboardShell() {
                         ? `${captureFileName ? `${captureFileName}: ` : ""}${captureStatus}`
                         : captureFileName
                           ? `${captureFileName} is selected.`
-                        : "Use photo for a clear kWh display, video when the meter cycles through screens, or gallery upload for an existing clip."}
+                        : permissionPreferences.cameraAccess
+                          ? "Use photo for a clear kWh display, video when the meter cycles through screens, or gallery upload for an existing clip."
+                          : "Enable camera access in Settings to use Take photo. Gallery upload still works for existing images."}
                     </AlertDescription>
                   </Alert>
                   {latestReading ? (
@@ -960,7 +1199,7 @@ export function DashboardShell() {
                       </CardTitle>
                     </div>
                     <Badge variant="secondary">
-                      Pending
+                      {permissionPreferences.aiAdvice ? "Pending" : "Disabled"}
                     </Badge>
                   </div>
                 </CardHeader>
@@ -968,23 +1207,37 @@ export function DashboardShell() {
                   <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
                     <Sparkles className="mb-4 size-5 text-accent" />
                     <h3 className="text-xl font-extrabold">
-                      No advice generated yet.
+                      {permissionPreferences.aiAdvice
+                        ? "No advice generated yet."
+                        : "AI advice is disabled."}
                     </h3>
                     <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                      Once a meter reading is processed, ShockProof will show clear household actions, projected savings, and slab-risk warnings here.
+                      {permissionPreferences.aiAdvice
+                        ? "Once a meter reading is processed, ShockProof will show clear household actions, projected savings, and slab-risk warnings here."
+                        : "Turn AI advice back on in Settings before generating household recommendations."}
                     </p>
                   </div>
                   <div className="grid gap-3">
                     {[
-                      "Advice will appear after Gemini OCR is connected",
-                      "Savings actions will use selected Discom rules",
+                      permissionPreferences.aiAdvice
+                        ? "Advice will appear after Gemini OCR is connected"
+                        : "AI advice consent is currently off",
+                      featurePreferences.hinglishAdvice
+                        ? "Savings actions will use Hinglish wording"
+                        : "Savings actions will use selected language",
                       "Follow-up reminder will use the billing cycle date",
                     ].map((item) => (
                       <label
                         key={item}
                         className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3 text-sm font-semibold text-muted-foreground"
                       >
-                        <Checkbox disabled />
+                        <Checkbox
+                          disabled
+                          checked={
+                            item === "AI advice consent is currently off" ||
+                            item === "Savings actions will use Hinglish wording"
+                          }
+                        />
                         {item}
                       </label>
                     ))}
@@ -1270,11 +1523,11 @@ export function DashboardShell() {
                   </section>
 
                   <div className="grid gap-3">
-                    {[
-                      ["Slab jump alerts", "Notify before projected usage crosses a tariff threshold."],
-                      ["Hinglish advice", "Use simple, household-friendly AI recommendations."],
-                      ["Realtime dashboard", "Refresh when processing status completes."],
-                    ].map(([title, description]) => (
+                    {(
+                      Object.entries(featureLabels) as Array<
+                        [keyof FeaturePreferences, readonly [string, string]]
+                      >
+                    ).map(([key, [title, description]]) => (
                       <div
                         key={title}
                         className="flex items-center justify-between gap-4 rounded-xl border border-white/10 bg-white/5 p-4"
@@ -1285,7 +1538,17 @@ export function DashboardShell() {
                             {description}
                           </p>
                         </div>
-                        <Switch />
+                        <Switch
+                          checked={featurePreferences[key]}
+                          onCheckedChange={(checked) => {
+                            if (key === "slabJumpAlerts") {
+                              void toggleSlabAlerts(checked);
+                              return;
+                            }
+
+                            setFeaturePreference(key, checked);
+                          }}
+                        />
                       </div>
                     ))}
                   </div>
@@ -1332,12 +1595,16 @@ export function DashboardShell() {
                     <div>
                       <h3 className="text-xl font-bold">Permissions</h3>
                       <p className="text-sm text-muted-foreground">
-                        These will connect to browser and Supabase permissions
-                        during implementation.
+                        Camera and notifications request browser permission;
+                        uploads and AI advice are app consent controls.
                       </p>
                     </div>
                     <div className="grid gap-3">
-                      {permissions.map(([title, description]) => (
+                      {(
+                        Object.entries(permissionLabels) as Array<
+                          [keyof PermissionPreferences, readonly [string, string]]
+                        >
+                      ).map(([key, [title, description]]) => (
                         <div
                           key={title}
                           className="flex items-center justify-between gap-4 rounded-xl border border-white/10 bg-white/5 p-4"
@@ -1347,8 +1614,33 @@ export function DashboardShell() {
                             <p className="text-sm text-muted-foreground">
                               {description}
                             </p>
+                            {permissionStatuses[key] ? (
+                              <p className="mt-1 text-xs font-semibold text-accent">
+                                {permissionStatuses[key]}
+                              </p>
+                            ) : null}
                           </div>
-                          <Switch />
+                          <Switch
+                            checked={permissionPreferences[key]}
+                            onCheckedChange={(checked) => {
+                              if (key === "cameraAccess") {
+                                void toggleCameraAccess(checked);
+                                return;
+                              }
+
+                              if (key === "notifications") {
+                                void toggleNotifications(checked);
+                                return;
+                              }
+
+                              if (key === "videoUpload") {
+                                toggleVideoUpload(checked);
+                                return;
+                              }
+
+                              toggleAiAdvice(checked);
+                            }}
+                          />
                         </div>
                       ))}
                     </div>
