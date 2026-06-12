@@ -818,8 +818,8 @@ export function DashboardShell() {
   }
 
   return (
-    <main className="min-h-svh px-4 py-5 text-foreground sm:px-6 lg:px-8">
-      <div className="mx-auto flex min-h-[calc(100svh-2.5rem)] w-full max-w-7xl flex-col gap-4">
+    <main className="min-h-svh overflow-x-hidden px-4 py-5 text-foreground sm:px-6 lg:px-8">
+      <div className="mx-auto flex min-h-[calc(100svh-2.5rem)] w-full max-w-7xl min-w-0 flex-col gap-4">
         <header className="flex items-center justify-between rounded-2xl border border-white/10 bg-card/70 px-4 py-3 shadow-2xl backdrop-blur-xl">
           <div className="flex items-center gap-3">
             <Image
@@ -981,8 +981,8 @@ export function DashboardShell() {
             ) : null}
 
             {activeTab === "capture" ? (
-            <section className="mt-3">
-              <Card className="border-white/10 bg-card/70">
+            <section className="mt-3 min-w-0">
+              <Card className="min-w-0 border-white/10 bg-card/70">
                 <CardHeader>
                   <CardDescription>Meter capture</CardDescription>
                   <CardTitle className="text-2xl font-extrabold">Add a meter reading</CardTitle>
@@ -1219,7 +1219,7 @@ export function DashboardShell() {
                     Settings
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="grid gap-6">
+                <CardContent className="grid min-w-0 gap-6">
                   <section className="grid gap-3">
                     <div className="flex items-start justify-between gap-4">
                       <div>
@@ -1230,7 +1230,7 @@ export function DashboardShell() {
                       </div>
                       <Cpu className="size-5 text-muted-foreground" />
                     </div>
-                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <div className="grid min-w-0 gap-3 sm:grid-cols-[repeat(2,minmax(0,1fr))] xl:grid-cols-[repeat(4,minmax(0,1fr))]">
                       {[
                         ["Calls", usageSummary.calls.toString(), "Gemini requests"],
                         [
@@ -1251,7 +1251,7 @@ export function DashboardShell() {
                       ].map(([label, value, hint]) => (
                         <div
                           key={label}
-                          className="rounded-xl border border-white/10 bg-white/5 p-4"
+                          className="min-w-0 rounded-xl border border-white/10 bg-white/5 p-4"
                         >
                           <p className="text-sm font-medium text-muted-foreground">
                             {label}
@@ -1270,11 +1270,11 @@ export function DashboardShell() {
                         usageSummary.recentEvents.map((event) => (
                           <div
                             key={event.id}
-                            className="flex flex-col gap-1 rounded-xl border border-white/10 bg-white/5 p-3 text-sm sm:flex-row sm:items-center sm:justify-between"
+                            className="flex min-w-0 flex-col gap-1 rounded-xl border border-white/10 bg-white/5 p-3 text-sm sm:flex-row sm:items-center sm:justify-between"
                           >
-                            <div>
+                            <div className="min-w-0">
                               <p className="font-bold">{event.model}</p>
-                              <p className="text-muted-foreground">
+                              <p className="break-words text-muted-foreground">
                                 {event.purpose} -{" "}
                                 {(event.total_tokens ?? 0).toLocaleString()} tokens
                               </p>
@@ -1358,7 +1358,7 @@ export function DashboardShell() {
                         Basic household details for account and bill context.
                       </p>
                     </div>
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid min-w-0 gap-3 sm:grid-cols-[repeat(2,minmax(0,1fr))]">
                       <Input
                         placeholder="Full name"
                         value={settingsDraft.fullName}
@@ -1411,9 +1411,9 @@ export function DashboardShell() {
                         the electricity bill.
                       </p>
                     </div>
-                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <div className="grid min-w-0 gap-3 sm:grid-cols-[repeat(2,minmax(0,1fr))] xl:grid-cols-[repeat(4,minmax(0,1fr))]">
                       <Select value={selectedState} onValueChange={setSelectedState}>
-                        <SelectTrigger>
+                        <SelectTrigger className="w-full min-w-0">
                           <SelectValue placeholder="Select state / UT" />
                         </SelectTrigger>
                         <SelectContent>
@@ -1426,7 +1426,7 @@ export function DashboardShell() {
                       </Select>
 
                       <Select value={selectedDiscom} onValueChange={setSelectedDiscom}>
-                        <SelectTrigger>
+                        <SelectTrigger className="w-full min-w-0">
                           <SelectValue placeholder="Select Discom" />
                         </SelectTrigger>
                         <SelectContent>
@@ -1442,7 +1442,7 @@ export function DashboardShell() {
                         value={selectedBillingCycle}
                         onValueChange={setSelectedBillingCycle}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className="w-full min-w-0">
                           <SelectValue placeholder="Billing cycle" />
                         </SelectTrigger>
                         <SelectContent>
@@ -1463,14 +1463,14 @@ export function DashboardShell() {
                         onChange={(event) => setCustomCycleDay(event.target.value)}
                       />
                     </div>
-                    <Alert className="border-accent/30 bg-accent/10">
+                    <Alert className="min-w-0 overflow-hidden border-accent/30 bg-accent/10 [&>*]:min-w-0">
                       <Gauge className="size-4" />
                       <AlertTitle>
                         {suggestedDiscoms.length > 0
                           ? `Suggested for ${selectedState}`
                           : "Discom reference"}
                       </AlertTitle>
-                      <AlertDescription>
+                      <AlertDescription className="min-w-0 break-words text-wrap [overflow-wrap:anywhere]">
                         {suggestedDiscoms.length > 0 ? (
                           <span className="mt-2 flex flex-wrap gap-2">
                             {suggestedDiscoms.map((discom) => {
@@ -1521,7 +1521,7 @@ export function DashboardShell() {
                       value={selectedLanguage}
                       onValueChange={setSelectedLanguage}
                     >
-                      <SelectTrigger className="max-w-sm">
+                      <SelectTrigger className="w-full max-w-sm min-w-0">
                         <SelectValue placeholder="Select language" />
                       </SelectTrigger>
                       <SelectContent>
@@ -1542,8 +1542,8 @@ export function DashboardShell() {
                         access after the account is working.
                       </p>
                     </div>
-                    <div className="grid gap-3 lg:grid-cols-2">
-                      <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+                    <div className="grid min-w-0 gap-3 lg:grid-cols-[repeat(2,minmax(0,1fr))]">
+                      <div className="min-w-0 rounded-xl border border-white/10 bg-white/5 p-4">
                         <p className="font-bold">1. Match your electricity bill</p>
                         <p className="mt-1 text-sm text-muted-foreground">
                           Select the state, Discom, billing cycle, and language
@@ -1551,21 +1551,21 @@ export function DashboardShell() {
                           warnings will use.
                         </p>
                       </div>
-                      <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+                      <div className="min-w-0 rounded-xl border border-white/10 bg-white/5 p-4">
                         <p className="font-bold">2. Capture the meter display</p>
                         <p className="mt-1 text-sm text-muted-foreground">
                           Use a sharp photo when the kWh display is visible.
                           Use video only when the meter cycles between screens.
                         </p>
                       </div>
-                      <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+                      <div className="min-w-0 rounded-xl border border-white/10 bg-white/5 p-4">
                         <p className="font-bold">3. Review OCR before trusting it</p>
                         <p className="mt-1 text-sm text-muted-foreground">
                           If Gemini is unsure or mistakes a date for a reading,
                           save the correct kWh manually from the Capture tab.
                         </p>
                       </div>
-                      <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+                      <div className="min-w-0 rounded-xl border border-white/10 bg-white/5 p-4">
                         <p className="font-bold">4. Watch slab risk and advice</p>
                         <p className="mt-1 text-sm text-muted-foreground">
                           Once readings and tariff rules are connected,
@@ -1574,9 +1574,9 @@ export function DashboardShell() {
                         </p>
                       </div>
                     </div>
-                    <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+                    <div className="min-w-0 rounded-xl border border-white/10 bg-white/5 p-4">
                       <p className="font-bold">Passkeys by device</p>
-                      <div className="mt-3 grid gap-3 md:grid-cols-2">
+                      <div className="mt-3 grid min-w-0 gap-3 md:grid-cols-[repeat(2,minmax(0,1fr))]">
                         {[
                           [
                             "Windows laptop",
@@ -1595,9 +1595,9 @@ export function DashboardShell() {
                             "Use Touch ID or the Mac password. iCloud Keychain can sync it.",
                           ],
                         ].map(([device, guidance]) => (
-                          <div key={device}>
+                          <div key={device} className="min-w-0">
                             <p className="text-sm font-bold">{device}</p>
-                            <p className="text-sm text-muted-foreground">
+                            <p className="break-words text-sm text-muted-foreground">
                               {guidance}
                             </p>
                           </div>
