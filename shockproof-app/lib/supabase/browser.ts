@@ -10,6 +10,9 @@ export function createClient() {
 
   return createBrowserClient(supabaseUrl, supabaseAnonKey, {
     auth: {
+      autoRefreshToken: false,
+      detectSessionInUrl: true,
+      persistSession: true,
       experimental: {
         passkey: true,
       },
