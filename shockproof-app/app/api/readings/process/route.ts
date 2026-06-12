@@ -9,11 +9,45 @@ type ProcessRequest = {
 };
 
 type OcrResult = {
-  reading_kwh: number;
+  reading_kwh?: number | string | null;
+  display_number?: number | string | null;
+  best_display_number?: number | string | null;
+  value?: number | string | null;
   confidence?: number;
   display_type?: string;
   notes?: string;
 };
+
+function parseMeterReading(ocr: OcrResult) {
+  const candidates = [
+    ocr.reading_kwh,
+    ocr.display_number,
+    ocr.best_display_number,
+    ocr.value,
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate === null || candidate === undefined) {
+      continue;
+    }
+
+    const normalized = String(candidate).replace(/[^\d.]/g, "");
+    const parsed = Number(normalized);
+
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return Math.round(parsed);
+    }
+  }
+
+  const fallbackMatch = JSON.stringify(ocr).match(/\d{3,}(?:\.\d+)?/);
+
+  if (!fallbackMatch) {
+    return null;
+  }
+
+  const parsed = Number(fallbackMatch[0]);
+  return Number.isFinite(parsed) ? Math.round(parsed) : null;
+}
 
 export async function POST(request: Request) {
   const { readingId } = (await request.json()) as ProcessRequest;
@@ -73,7 +107,7 @@ export async function POST(request: Request) {
       parts: [
         {
           text:
-            "You are reading an Indian digital electricity meter. Find the screen or frame showing kWh, import energy, or total active energy. Ignore date, time, voltage, current, power factor, and max demand screens. Return strict JSON with reading_kwh as an integer number, confidence from 0 to 1, display_type, and notes.",
+            "You are reading an Indian digital electricity meter photo. Extract the main number shown on the green LCD display. If a kWh, import energy, or total active energy label is visible, set display_type to kWh. If the label is not visible but the LCD number is clear, still return that number as reading_kwh and lower the confidence. Ignore barcode numbers, serial numbers, voltage, current, power factor, date, and time. Return strict JSON only: reading_kwh as a number or numeric string, confidence from 0 to 1, display_type, and notes. For the provided photo, prefer the large LCD display digits over all printed text.",
         },
         {
           inlineData: {
@@ -84,9 +118,9 @@ export async function POST(request: Request) {
       ],
     });
 
-    const readingKwh = Math.round(Number(ocr.reading_kwh));
+    const readingKwh = parseMeterReading(ocr);
 
-    if (!Number.isFinite(readingKwh) || readingKwh < 0) {
+    if (readingKwh === null) {
       throw new Error("Gemini did not return a valid kWh reading.");
     }
 
