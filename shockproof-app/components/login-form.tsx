@@ -26,17 +26,12 @@ import { Input } from "@/components/ui/input";
 
 export function LoginForm({
   className,
+  initialStatus = "",
   ...props
-}: React.ComponentProps<"div">) {
+}: React.ComponentProps<"div"> & { initialStatus?: string }) {
   const router = useRouter();
   const [email, setEmail] = useState("");
-  const [status, setStatus] = useState(() => {
-    if (typeof window === "undefined") {
-      return "";
-    }
-
-    return new URLSearchParams(window.location.search).get("message") ?? "";
-  });
+  const [status, setStatus] = useState(initialStatus);
   const [pendingAction, setPendingAction] = useState<
     "passkey" | "google" | "email" | null
   >(null);
