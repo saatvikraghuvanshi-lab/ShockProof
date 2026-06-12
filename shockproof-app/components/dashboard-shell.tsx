@@ -2,10 +2,12 @@
 
 import Link from "next/link";
 import Image from "next/image";
+import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Camera,
+  ChevronDown,
   Cpu,
   Fingerprint,
   Gauge,
@@ -53,8 +55,6 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 
-const pipeline = ["Video upload", "Gemini OCR", "Postgres slabs", "AI advice"];
-
 const appTabs = [
   { value: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { value: "capture", label: "Capture", icon: Camera },
@@ -74,6 +74,21 @@ type MeterReading = {
   display_type: string | null;
   ai_notes: string | null;
   error_message: string | null;
+  current_usage: number | null;
+  projected_units: number | null;
+  next_slab_at: number | null;
+  units_to_next_slab: number | null;
+  estimated_bill: number | null;
+  estimated_delta: number | null;
+  bill_risk: "low" | "medium" | "high" | null;
+  advice_json: {
+    summary?: string;
+    actions?: string[];
+    risk_note?: string;
+    assumptions?: string[];
+    tariff_source?: string;
+    previous_reading_kwh?: number | null;
+  } | null;
   created_at?: string | null;
 };
 
@@ -254,6 +269,69 @@ function formatRupeeCost(valueUsd: number) {
   }).format(valueInr);
 }
 
+function getBillingCycleDay(option: string, customDay: string) {
+  if (option === "Custom date") {
+    const parsed = Number(customDay);
+    return Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), 31) : null;
+  }
+
+  const match = option.match(/\d+/);
+  return match ? Number(match[0]) : null;
+}
+
+function isAmbiguousProcessedReading(reading?: MeterReading | null) {
+  if (!reading || reading.status !== "processed" || !reading.reading_kwh) {
+    return false;
+  }
+
+  const reviewText = `${reading.ai_notes ?? ""} ${reading.display_type ?? ""}`.toLowerCase();
+
+  return (
+    reading.reading_kwh < 10000 &&
+    /\b(date|time|ambiguous|ambiguity|provisional|unclear|partial)\b/.test(
+      reviewText
+    )
+  );
+}
+
+function SettingsSection({
+  title,
+  description,
+  icon,
+  defaultOpen = false,
+  children,
+}: {
+  title: string;
+  description: string;
+  icon?: React.ReactNode;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+
+  return (
+    <details
+      className="group min-w-0 rounded-2xl border border-white/10 bg-white/[0.03]"
+      open={isOpen}
+      onToggle={(event) => setIsOpen(event.currentTarget.open)}
+    >
+      <summary className="flex cursor-pointer list-none items-start justify-between gap-4 p-4 marker:hidden [&::-webkit-details-marker]:hidden">
+        <div className="min-w-0">
+          <h3 className="text-xl font-bold">{title}</h3>
+          <p className="mt-1 break-words text-sm text-muted-foreground">
+            {description}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2 text-muted-foreground">
+          {icon}
+          <ChevronDown className="size-4 transition-transform group-open:rotate-180" />
+        </div>
+      </summary>
+      <div className="grid min-w-0 gap-3 px-4 pb-4">{children}</div>
+    </details>
+  );
+}
+
 export function DashboardShell() {
   const router = useRouter();
   const initialSettings = useMemo(() => readStoredSettings(), []);
@@ -307,40 +385,67 @@ export function DashboardShell() {
   const suggestedDiscoms = selectedState
     ? suggestedDiscomsByState[selectedState] ?? []
     : [];
+  const latestReadingNeedsReview = isAmbiguousProcessedReading(latestReading);
+  const hasCleanProcessedReading =
+    latestReading?.status === "processed" &&
+    !!latestReading.reading_kwh &&
+    !latestReadingNeedsReview;
+  const hasProjection =
+    hasCleanProcessedReading && latestReading.projected_units !== null;
+  const hasAdvice =
+    hasProjection &&
+    permissionPreferences.aiAdvice &&
+    !!latestReading.advice_json?.summary;
 
   const metrics = useMemo(
     () => [
       [
         "Current",
-        latestReading?.reading_kwh
-          ? `${Math.round(latestReading.reading_kwh)} kWh`
+        hasCleanProcessedReading
+          ? `${Math.round(latestReading.current_usage ?? latestReading.reading_kwh ?? 0)} kWh`
           : "-- kWh",
-        latestReading?.reading_kwh
-          ? `${Math.round((latestReading.confidence ?? 0) * 100)}% OCR confidence`
+        hasCleanProcessedReading
+          ? "usage since previous/baseline reading"
           : latestReading
             ? "Capture uploaded"
             : "Waiting for first meter read",
       ],
       [
         "Projected",
-        "--",
-        "Gemini OCR is next",
+        hasProjection ? `${Math.round(latestReading.projected_units ?? 0)} kWh` : "--",
+        hasProjection
+          ? "estimated by billing-cycle pace"
+          : "needs OCR and tariff setup",
       ],
       [
         "Next slab",
-        "--",
-        "Projection starts after OCR",
+        hasProjection && latestReading.units_to_next_slab !== null
+          ? `${Math.round(latestReading.units_to_next_slab)} kWh`
+          : "--",
+        hasProjection
+          ? latestReading.next_slab_at
+            ? `threshold at ${Math.round(latestReading.next_slab_at)} kWh`
+            : "already in final slab"
+          : "needs tariff slabs",
       ],
       [
         "Status",
-        latestReading?.status ?? "Ready",
-        latestReading?.error_message ??
-          latestReading?.ai_notes ??
-          latestReading?.storage_path ??
-          "Start with meter capture",
+        latestReadingNeedsReview
+          ? "needs review"
+          : hasAdvice
+            ? "advice ready"
+            : latestReading?.status ?? "Ready",
+        latestReadingNeedsReview
+          ? "OCR looked date-like; correct it manually in Capture."
+          : hasAdvice
+            ? latestReading.advice_json?.summary ?? "Advice generated."
+            : latestReading?.error_message ??
+              latestReading?.ai_notes ??
+              latestReading?.storage_path ??
+              "Start with meter capture",
       ],
     ],
-    [latestReading]
+    [hasAdvice, hasCleanProcessedReading, hasProjection, latestReading, latestReadingNeedsReview]
   );
 
   const loadLatestReading = useCallback(async (currentUserId: string) => {
@@ -348,7 +453,7 @@ export function DashboardShell() {
     const { data: readings } = await supabase
       .from("meter_readings")
       .select(
-        "id, status, image_url, storage_path, reading_kwh, confidence, display_type, ai_notes, error_message, created_at"
+        "id, status, image_url, storage_path, reading_kwh, confidence, display_type, ai_notes, error_message, current_usage, projected_units, next_slab_at, units_to_next_slab, estimated_bill, estimated_delta, bill_risk, advice_json, created_at"
       )
       .eq("user_id", currentUserId)
       .order("id", { ascending: false })
@@ -757,7 +862,7 @@ export function DashboardShell() {
         user_id: userId,
       })
       .select(
-        "id, status, image_url, storage_path, reading_kwh, confidence, display_type, ai_notes, error_message"
+        "id, status, image_url, storage_path, reading_kwh, confidence, display_type, ai_notes, error_message, current_usage, projected_units, next_slab_at, units_to_next_slab, estimated_bill, estimated_delta, bill_risk, advice_json, created_at"
       )
       .single();
 
@@ -776,7 +881,20 @@ export function DashboardShell() {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ readingId: reading.id }),
+      body: JSON.stringify({
+        readingId: reading.id,
+        settings: {
+          state: selectedState,
+          discom: selectedDiscom,
+          billingCycleDay: getBillingCycleDay(
+            selectedBillingCycle,
+            customCycleDay
+          ),
+          language: selectedLanguage,
+          useHinglish: featurePreferences.hinglishAdvice,
+          allowAdvice: permissionPreferences.aiAdvice,
+        },
+      }),
     });
     const processPayload = await processResponse.json();
 
@@ -788,7 +906,7 @@ export function DashboardShell() {
 
     setCaptureStatus(
       processPayload.reading_kwh
-        ? `Processed. Gemini read ${processPayload.reading_kwh} kWh.`
+        ? `Processed. Gemini read ${processPayload.reading_kwh} kWh and generated projection${processPayload.advice ? " + advice" : ""}.`
         : "Processed. Dashboard updated."
     );
     setIsUploadingCapture(false);
@@ -881,7 +999,13 @@ export function DashboardShell() {
             {activeTab === "dashboard" ? (
             <section className="mt-3 space-y-3">
               <div className="grid gap-3 lg:grid-cols-[1.3fr_0.7fr]">
-                <Card className="border-white/10 bg-card/70">
+                <Card
+                  className={cn(
+                    "border-white/10 bg-card/70",
+                    hasCleanProcessedReading &&
+                      "border-emerald-400/30 bg-emerald-950/20"
+                  )}
+                >
                   <CardHeader>
                     <div className="flex items-start justify-between gap-4">
                       <div>
@@ -909,52 +1033,80 @@ export function DashboardShell() {
                       </div>
                       <div>
                         <p className="text-sm font-bold text-destructive">
-                          {latestReading?.reading_kwh
-                            ? "Gemini OCR complete"
-                            : latestReading
-                              ? "Capture uploaded"
-                              : "Awaiting meter reading"}
+                          {latestReadingNeedsReview
+                            ? "OCR needs review"
+                            : hasCleanProcessedReading
+                              ? "Gemini OCR complete"
+                              : latestReading
+                                ? "Capture uploaded"
+                                : "Awaiting meter reading"}
                         </p>
                         <h2 className="text-2xl font-extrabold">
-                          {latestReading?.reading_kwh
-                            ? `${Math.round(latestReading.reading_kwh)} kWh extracted`
-                            : latestReading
-                              ? "Ready for OCR"
-                              : "No reading yet"}
+                          {latestReadingNeedsReview
+                            ? "Check the extracted value"
+                            : hasCleanProcessedReading
+                              ? `${Math.round(latestReading.reading_kwh ?? 0)} kWh extracted`
+                              : latestReading
+                                ? "Ready for OCR"
+                                : "No reading yet"}
                         </h2>
                         <p className="mt-2 text-sm text-muted-foreground">
-                          {latestReading?.reading_kwh
-                            ? `${latestReading.display_type ?? "kWh"} display detected with ${Math.round(
-                                (latestReading.confidence ?? 0) * 100
-                              )}% confidence.`
-                            : latestReading
-                            ? "The capture is stored in Supabase. Gemini extraction is the next pipeline step."
-                            : "Record a meter clip to calculate projected usage, slab threshold, and bill-risk trajectory."}
+                          {latestReadingNeedsReview
+                            ? "Gemini's note suggests this may be a date/time-like value. Correct it manually before using projections."
+                            : hasCleanProcessedReading
+                              ? `${latestReading.display_type ?? "kWh"} display detected with ${Math.round(
+                                  (latestReading.confidence ?? 0) * 100
+                                )}% confidence. ${hasProjection ? "Projection and slab risk are calculated." : "Projection still needs tariff context."}`
+                              : latestReading
+                                ? "The capture is stored in Supabase. Gemini extraction is the next pipeline step."
+                                : "Record a meter clip to calculate projected usage, slab threshold, and bill-risk trajectory."}
                         </p>
                       </div>
                     </div>
                     <Progress
                       value={
-                        latestReading?.reading_kwh ? 65 : latestReading ? 35 : 0
+                        hasAdvice
+                          ? 100
+                          : hasProjection
+                            ? 85
+                            : hasCleanProcessedReading
+                              ? 65
+                              : latestReading
+                                ? 35
+                                : 0
                       }
                     />
                   </CardContent>
                 </Card>
 
-                <Alert className="border-accent/30 bg-accent/10">
+                <Alert
+                  className={cn(
+                    "border-accent/30 bg-accent/10",
+                    hasCleanProcessedReading &&
+                      "border-emerald-400/40 bg-emerald-950/20 text-emerald-50"
+                  )}
+                >
                   <Gauge className="size-4" />
                   <AlertTitle>
-                    {latestReading?.reading_kwh
-                      ? "Gemini OCR saved"
+                    {latestReadingNeedsReview
+                      ? "OCR needs review"
+                      : hasAdvice
+                        ? "Projection and advice ready"
+                        : hasCleanProcessedReading
+                          ? "Gemini OCR saved"
                       : latestReading
                         ? "Supabase upload ready"
                         : "Ready for first capture"}
                   </AlertTitle>
                   <AlertDescription>
-                    {latestReading?.error_message ??
-                      latestReading?.ai_notes ??
-                      latestReading?.storage_path ??
-                      "Connect state, Discom, and billing cycle before generating slab-aware advice."}
+                    {latestReadingNeedsReview
+                      ? "Gemini returned a date/time-like value. Save the correct kWh manually before using projection or advice."
+                      : hasAdvice
+                        ? latestReading.advice_json?.summary
+                        : latestReading?.error_message ??
+                          latestReading?.ai_notes ??
+                          latestReading?.storage_path ??
+                          "Connect state, Discom, and billing cycle before generating slab-aware advice."}
                   </AlertDescription>
                 </Alert>
               </div>
@@ -1152,57 +1304,124 @@ export function DashboardShell() {
                       </CardTitle>
                     </div>
                     <Badge variant="secondary">
-                      {permissionPreferences.aiAdvice ? "Pending" : "Disabled"}
+                      {hasAdvice
+                        ? "Ready"
+                        : permissionPreferences.aiAdvice
+                          ? "Pending"
+                          : "Disabled"}
                     </Badge>
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
+                  <div
+                    className={cn(
+                      "rounded-2xl border border-white/10 bg-white/5 p-5",
+                      hasAdvice && "border-emerald-400/30 bg-emerald-950/20"
+                    )}
+                  >
                     <Sparkles className="mb-4 size-5 text-accent" />
                     <h3 className="text-xl font-extrabold">
-                      {permissionPreferences.aiAdvice
-                        ? "No advice generated yet."
-                        : "AI advice is disabled."}
+                      {hasAdvice
+                        ? latestReading.advice_json?.summary
+                        : permissionPreferences.aiAdvice
+                          ? "No advice generated yet."
+                          : "AI advice is disabled."}
                     </h3>
                     <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                      {permissionPreferences.aiAdvice
-                        ? "Once a meter reading is processed, ShockProof will show clear household actions, projected savings, and slab-risk warnings here."
-                        : "Turn AI advice back on in Settings before generating household recommendations."}
+                      {hasAdvice
+                        ? latestReading.advice_json?.risk_note ??
+                          "Advice is based on the latest processed reading and projection."
+                        : permissionPreferences.aiAdvice
+                          ? hasCleanProcessedReading
+                            ? "This reading was processed before advice generation existed, or tariff settings were missing. Upload again or save a manual correction to generate advice."
+                            : "Once a meter reading is processed, ShockProof will show clear household actions, projected savings, and slab-risk warnings here."
+                          : "Turn AI advice back on in Settings before generating household recommendations."}
                     </p>
                   </div>
-                  <div className="grid gap-3">
-                    {[
-                      permissionPreferences.aiAdvice
-                        ? "Advice will appear after Gemini OCR is connected"
-                        : "AI advice consent is currently off",
-                      featurePreferences.hinglishAdvice
-                        ? "Savings actions will use Hinglish wording"
-                        : "Savings actions will use selected language",
-                      "Follow-up reminder will use the billing cycle date",
-                    ].map((item) => (
-                      <label
-                        key={item}
-                        className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3 text-sm font-semibold text-muted-foreground"
-                      >
-                        <Checkbox
-                          disabled
-                          checked={
-                            item === "AI advice consent is currently off" ||
-                            item === "Savings actions will use Hinglish wording"
-                          }
-                        />
-                        {item}
-                      </label>
-                    ))}
-                  </div>
+                  {hasAdvice ? (
+                    <div className="grid gap-3">
+                      {(latestReading.advice_json?.actions ?? []).map((action) => (
+                        <label
+                          key={action}
+                          className="flex min-w-0 items-start gap-3 rounded-xl border border-white/10 bg-white/5 p-3 text-sm font-semibold text-muted-foreground"
+                        >
+                          <Checkbox checked disabled className="mt-0.5" />
+                          <span className="break-words">{action}</span>
+                        </label>
+                      ))}
+                      {latestReading.advice_json?.assumptions?.length ? (
+                        <p className="rounded-xl border border-white/10 bg-white/5 p-3 text-xs font-medium text-muted-foreground">
+                          Assumptions:{" "}
+                          {latestReading.advice_json.assumptions.join("; ")}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </CardContent>
               </Card>
 
-              <div className="grid gap-3 sm:grid-cols-4">
-                {pipeline.map((step) => (
-                  <Card key={step} className="border-white/10 bg-card/70">
-                    <CardContent className="grid min-h-20 place-items-center p-4 text-center text-sm font-bold">
-                      {step}
+              <div className="grid min-w-0 gap-3 sm:grid-cols-[repeat(2,minmax(0,1fr))] xl:grid-cols-[repeat(4,minmax(0,1fr))]">
+                {[
+                  [
+                    "Video upload",
+                    latestReading ? "Saved" : "Waiting",
+                    latestReading?.storage_path ?? "Upload a capture first.",
+                    !!latestReading,
+                  ],
+                  [
+                    "Gemini OCR",
+                    latestReadingNeedsReview
+                      ? "Review"
+                      : hasCleanProcessedReading
+                        ? "Done"
+                        : latestReading?.status ?? "Waiting",
+                    latestReadingNeedsReview
+                      ? "OCR looked date-like; correct it before projecting."
+                      : hasCleanProcessedReading
+                        ? `${Math.round(latestReading.reading_kwh ?? 0)} kWh extracted.`
+                        : "Extracts the meter display from the capture.",
+                    hasCleanProcessedReading,
+                  ],
+                  [
+                    "Postgres slabs",
+                    hasProjection ? "Calculated" : "Waiting",
+                    hasProjection
+                      ? `${Math.round(latestReading.projected_units ?? 0)} kWh projected, ${latestReading.bill_risk ?? "low"} risk${
+                          latestReading.advice_json?.tariff_source === "fallback"
+                            ? " using fallback slabs."
+                            : "."
+                        }`
+                      : "Calculates current usage, projected usage, next slab, and bill risk.",
+                    hasProjection,
+                  ],
+                  [
+                    "AI advice",
+                    hasAdvice
+                      ? "Ready"
+                      : permissionPreferences.aiAdvice
+                        ? "Waiting"
+                        : "Disabled",
+                    hasAdvice
+                      ? latestReading.advice_json?.summary ?? "Advice generated."
+                      : "Generated after OCR and projection complete.",
+                    hasAdvice,
+                  ],
+                ].map(([step, status, detail, done]) => (
+                  <Card
+                    key={String(step)}
+                    className={cn(
+                      "min-w-0 border-white/10 bg-card/70",
+                      done && "border-emerald-400/30 bg-emerald-950/20"
+                    )}
+                  >
+                    <CardContent className="grid min-h-24 content-center gap-2 p-4 text-sm">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="font-bold">{step}</p>
+                        <Badge variant="secondary">{status}</Badge>
+                      </div>
+                      <p className="break-words text-xs font-medium text-muted-foreground">
+                        {detail}
+                      </p>
                     </CardContent>
                   </Card>
                 ))}
@@ -1220,16 +1439,12 @@ export function DashboardShell() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="grid min-w-0 gap-6">
-                  <section className="grid gap-3">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <h3 className="text-xl font-bold">Model usage</h3>
-                        <p className="text-sm text-muted-foreground">
-                          App-tracked Gemini calls and estimated spend.
-                        </p>
-                      </div>
-                      <Cpu className="size-5 text-muted-foreground" />
-                    </div>
+                  <SettingsSection
+                    title="Model usage"
+                    description="App-tracked Gemini calls and estimated spend."
+                    icon={<Cpu className="size-5" />}
+                    defaultOpen
+                  >
                     <div className="grid min-w-0 gap-3 sm:grid-cols-[repeat(2,minmax(0,1fr))] xl:grid-cols-[repeat(4,minmax(0,1fr))]">
                       {[
                         ["Calls", usageSummary.calls.toString(), "Gemini requests"],
@@ -1290,19 +1505,13 @@ export function DashboardShell() {
                         </p>
                       )}
                     </div>
-                  </section>
+                  </SettingsSection>
 
-                  <section className="grid gap-3">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <h3 className="text-xl font-bold">Reading history</h3>
-                        <p className="text-sm text-muted-foreground">
-                          Uploaded captures, OCR results, manual corrections,
-                          and failed attempts.
-                        </p>
-                      </div>
-                      <History className="size-5 text-muted-foreground" />
-                    </div>
+                  <SettingsSection
+                    title="Reading history"
+                    description="Uploaded captures, OCR results, manual corrections, and failed attempts."
+                    icon={<History className="size-5" />}
+                  >
                     <div className="grid gap-3">
                       {readingHistory.length > 0 ? (
                         readingHistory.map((reading) => (
@@ -1349,15 +1558,13 @@ export function DashboardShell() {
                         </p>
                       )}
                     </div>
-                  </section>
+                  </SettingsSection>
 
-                  <section className="grid gap-3">
-                    <div>
-                      <h3 className="text-xl font-bold">User info</h3>
-                      <p className="text-sm text-muted-foreground">
-                        Basic household details for account and bill context.
-                      </p>
-                    </div>
+                  <SettingsSection
+                    title="User info"
+                    description="Basic household details for account and bill context."
+                    defaultOpen
+                  >
                     <div className="grid min-w-0 gap-3 sm:grid-cols-[repeat(2,minmax(0,1fr))]">
                       <Input
                         placeholder="Full name"
@@ -1401,16 +1608,13 @@ export function DashboardShell() {
                         }
                       />
                     </div>
-                  </section>
+                  </SettingsSection>
 
-                  <section className="grid gap-3">
-                    <div>
-                      <h3 className="text-xl font-bold">Tariff location</h3>
-                      <p className="text-sm text-muted-foreground">
-                        Select the state, Discom, and billing cycle printed on
-                        the electricity bill.
-                      </p>
-                    </div>
+                  <SettingsSection
+                    title="Tariff location"
+                    description="Select the state, Discom, and billing cycle printed on the electricity bill."
+                    defaultOpen
+                  >
                     <div className="grid min-w-0 gap-3 sm:grid-cols-[repeat(2,minmax(0,1fr))] xl:grid-cols-[repeat(4,minmax(0,1fr))]">
                       <Select value={selectedState} onValueChange={setSelectedState}>
                         <SelectTrigger className="w-full min-w-0">
@@ -1508,15 +1712,12 @@ export function DashboardShell() {
                         )}
                       </AlertDescription>
                     </Alert>
-                  </section>
+                  </SettingsSection>
 
-                  <section className="grid gap-3">
-                    <div>
-                      <h3 className="text-xl font-bold">Language</h3>
-                      <p className="text-sm text-muted-foreground">
-                        Controls AI warning tone and household advice language.
-                      </p>
-                    </div>
+                  <SettingsSection
+                    title="Language"
+                    description="Controls AI warning tone and household advice language."
+                  >
                     <Select
                       value={selectedLanguage}
                       onValueChange={setSelectedLanguage}
@@ -1532,16 +1733,12 @@ export function DashboardShell() {
                         ))}
                       </SelectContent>
                     </Select>
-                  </section>
+                  </SettingsSection>
 
-                  <section className="grid gap-3">
-                    <div>
-                      <h3 className="text-xl font-bold">First-time guide</h3>
-                      <p className="text-sm text-muted-foreground">
-                        Set up the tariff context first, then add secure device
-                        access after the account is working.
-                      </p>
-                    </div>
+                  <SettingsSection
+                    title="First-time guide"
+                    description="Set up the tariff context first, then add secure device access after the account is working."
+                  >
                     <div className="grid min-w-0 gap-3 lg:grid-cols-[repeat(2,minmax(0,1fr))]">
                       <div className="min-w-0 rounded-xl border border-white/10 bg-white/5 p-4">
                         <p className="font-bold">1. Match your electricity bill</p>
@@ -1609,9 +1806,12 @@ export function DashboardShell() {
                         synced device.
                       </p>
                     </div>
-                  </section>
+                  </SettingsSection>
 
-                  <div className="grid gap-3">
+                  <SettingsSection
+                    title="Feature switches"
+                    description="Controls alerts, advice language, and realtime refresh behavior."
+                  >
                     {(
                       Object.entries(featureLabels) as Array<
                         [keyof FeaturePreferences, readonly [string, string]]
@@ -1640,16 +1840,12 @@ export function DashboardShell() {
                         />
                       </div>
                     ))}
-                  </div>
+                  </SettingsSection>
 
-                  <section className="grid gap-3">
-                    <div>
-                      <h3 className="text-xl font-bold">Passkey access</h3>
-                      <p className="text-sm text-muted-foreground">
-                        Register this browser/device for fingerprint, Face ID,
-                        Windows Hello, or device PIN sign-in.
-                      </p>
-                    </div>
+                  <SettingsSection
+                    title="Passkey access"
+                    description="Register this browser/device for fingerprint, Face ID, Windows Hello, or device PIN sign-in."
+                  >
                     <div className="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-4 sm:flex-row sm:items-center sm:justify-between">
                       <div>
                         <p className="font-bold">This device</p>
@@ -1678,16 +1874,12 @@ export function DashboardShell() {
                         <AlertDescription>{passkeyStatus}</AlertDescription>
                       </Alert>
                     ) : null}
-                  </section>
+                  </SettingsSection>
 
-                  <section className="grid gap-3">
-                    <div>
-                      <h3 className="text-xl font-bold">Permissions</h3>
-                      <p className="text-sm text-muted-foreground">
-                        Camera and notifications request browser permission;
-                        uploads and AI advice are app consent controls.
-                      </p>
-                    </div>
+                  <SettingsSection
+                    title="Permissions"
+                    description="Camera and notifications request browser permission; uploads and AI advice are app consent controls."
+                  >
                     <div className="grid gap-3">
                       {(
                         Object.entries(permissionLabels) as Array<
@@ -1733,7 +1925,7 @@ export function DashboardShell() {
                         </div>
                       ))}
                     </div>
-                  </section>
+                  </SettingsSection>
                 </CardContent>
               </Card>
             </section>

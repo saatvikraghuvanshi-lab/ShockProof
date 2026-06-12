@@ -4,11 +4,23 @@ import {
   type GeminiUsage,
   generateGeminiJsonWithUsage,
 } from "@/lib/gemini";
+import {
+  calculateProjection,
+  type TariffSlab,
+} from "@/lib/billing-projections";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
 type ProcessRequest = {
   readingId?: number;
+  settings?: {
+    state?: string;
+    discom?: string;
+    billingCycleDay?: number | null;
+    language?: string;
+    useHinglish?: boolean;
+    allowAdvice?: boolean;
+  };
 };
 
 type OcrResult = {
@@ -22,6 +34,20 @@ type OcrResult = {
   notes?: string;
   is_partial?: boolean;
 };
+
+type AdviceResult = {
+  summary?: string;
+  actions?: string[];
+  risk_note?: string;
+  assumptions?: string[];
+};
+
+const fallbackDomesticSlabs: TariffSlab[] = [
+  { slab_start: 0, slab_end: 100, rate: 4.5, fixed_charge: 100 },
+  { slab_start: 100, slab_end: 200, rate: 6, fixed_charge: 100 },
+  { slab_start: 200, slab_end: 400, rate: 8, fixed_charge: 100 },
+  { slab_start: 400, slab_end: null, rate: 10, fixed_charge: 100 },
+];
 
 function parseMeterReading(ocr: OcrResult, minimumDigits = 5) {
   const candidates = [
@@ -151,8 +177,108 @@ async function recordUsage({
   }
 }
 
+async function loadTariffSlabs({
+  admin,
+  state,
+  discom,
+}: {
+  admin: ReturnType<typeof createAdminClient>;
+  state?: string;
+  discom?: string;
+}) {
+  if (!state || !discom) {
+    return {
+      slabs: fallbackDomesticSlabs,
+      source: "fallback",
+    };
+  }
+
+  try {
+    const { data, error } = await admin
+      .from("tariff_slabs")
+      .select("slab_start, slab_end, rate, fixed_charge")
+      .eq("state", state)
+      .eq("discom", discom)
+      .eq("consumer_category", "domestic")
+      .order("slab_start", { ascending: true });
+
+    if (error || !data || data.length === 0) {
+      return {
+        slabs: fallbackDomesticSlabs,
+        source: "fallback",
+      };
+    }
+
+    return {
+      slabs: data as TariffSlab[],
+      source: "tariff_slabs",
+    };
+  } catch {
+    return {
+      slabs: fallbackDomesticSlabs,
+      source: "fallback",
+    };
+  }
+}
+
+async function loadPreviousReading({
+  admin,
+  userId,
+  readingId,
+}: {
+  admin: ReturnType<typeof createAdminClient>;
+  userId: string;
+  readingId: number;
+}) {
+  const { data } = await admin
+    .from("meter_readings")
+    .select("reading_kwh")
+    .eq("user_id", userId)
+    .eq("status", "processed")
+    .not("reading_kwh", "is", null)
+    .lt("id", readingId)
+    .order("id", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  return data?.reading_kwh === null || data?.reading_kwh === undefined
+    ? null
+    : Number(data.reading_kwh);
+}
+
+function getAdvicePrompt({
+  projection,
+  state,
+  discom,
+  language,
+  useHinglish,
+  tariffSource,
+}: {
+  projection: ReturnType<typeof calculateProjection>;
+  state?: string;
+  discom?: string;
+  language?: string;
+  useHinglish?: boolean;
+  tariffSource: string;
+}) {
+  return [
+    "Generate concise household electricity-saving advice for ShockProof.",
+    "Return strict JSON only with summary, actions, risk_note, and assumptions.",
+    "Keep actions practical and specific for a household.",
+    "Do not invent tariff amounts. If slab data is fallback/estimated, say the advice is provisional.",
+    `Language style: ${useHinglish ? "Hinglish" : language || "English"}.`,
+    `State: ${state || "not selected"}. Discom: ${discom || "not selected"}. Tariff source: ${tariffSource}.`,
+    `Current usage: ${projection.currentUsage} kWh.`,
+    `Projected month-end usage: ${projection.projectedUnits} kWh.`,
+    `Next slab at: ${projection.nextSlabAt ?? "none"} kWh.`,
+    `Units to next slab: ${projection.unitsToNextSlab ?? "none"}.`,
+    `Estimated bill: INR ${projection.estimatedBill}.`,
+    `Risk: ${projection.billRisk}. Days elapsed: ${projection.daysElapsed}. Days left: ${projection.daysLeft}.`,
+  ].join(" ");
+}
+
 export async function POST(request: Request) {
-  const { readingId } = (await request.json()) as ProcessRequest;
+  const { readingId, settings } = (await request.json()) as ProcessRequest;
 
   if (!readingId) {
     return NextResponse.json({ error: "readingId is required." }, { status: 400 });
@@ -273,6 +399,54 @@ export async function POST(request: Request) {
       );
     }
 
+    const previousReadingKwh = await loadPreviousReading({
+      admin,
+      userId: user.id,
+      readingId: reading.id,
+    });
+    const { slabs, source: tariffSource } = await loadTariffSlabs({
+      admin,
+      state: settings?.state,
+      discom: settings?.discom,
+    });
+    const projection = calculateProjection({
+      currentReadingKwh: readingKwh,
+      previousReadingKwh,
+      capturedAt: new Date(),
+      billingCycleDay: settings?.billingCycleDay ?? null,
+      slabs,
+    });
+    let adviceJson: AdviceResult | null = null;
+
+    if (settings?.allowAdvice !== false) {
+      const adviceModel =
+        process.env.GEMINI_ADVICE_MODEL ?? "gemini-3.1-flash-lite";
+      const advice = await generateGeminiJsonWithUsage<AdviceResult>({
+        model: adviceModel,
+        parts: [
+          {
+            text: getAdvicePrompt({
+              projection,
+              state: settings?.state,
+              discom: settings?.discom,
+              language: settings?.language,
+              useHinglish: settings?.useHinglish,
+              tariffSource,
+            }),
+          },
+        ],
+      });
+      adviceJson = advice.data;
+      await recordUsage({
+        admin,
+        userId: user.id,
+        readingId: reading.id,
+        model: adviceModel,
+        purpose: "household_advice",
+        usage: advice.usage,
+      });
+    }
+
     await admin
       .from("meter_readings")
       .update({
@@ -283,6 +457,20 @@ export async function POST(request: Request) {
         ai_notes:
           ocr.notes ??
           (ocr.raw_display_text ? `Raw display: ${ocr.raw_display_text}` : null),
+        current_usage: projection.currentUsage,
+        projected_units: projection.projectedUnits,
+        next_slab_at: projection.nextSlabAt,
+        units_to_next_slab: projection.unitsToNextSlab,
+        estimated_bill: projection.estimatedBill,
+        estimated_delta: projection.estimatedDelta,
+        bill_risk: projection.billRisk,
+        advice_json: adviceJson
+          ? {
+              ...adviceJson,
+              tariff_source: tariffSource,
+              previous_reading_kwh: previousReadingKwh,
+            }
+          : null,
         error_message: null,
         status: "processed",
       })
@@ -293,6 +481,8 @@ export async function POST(request: Request) {
       confidence: ocr.confidence ?? null,
       display_type: ocr.display_type ?? "kWh",
       notes: ocr.notes ?? null,
+      projection,
+      advice: adviceJson,
     });
   } catch (error) {
     const message =
