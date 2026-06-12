@@ -17,15 +17,26 @@ type GeminiResponse = {
   error?: {
     message?: string;
   };
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+    totalTokenCount?: number;
+  };
 };
 
-export async function generateGeminiJson<T>({
+export type GeminiUsage = {
+  promptTokenCount: number;
+  candidatesTokenCount: number;
+  totalTokenCount: number;
+};
+
+export async function generateGeminiJsonWithUsage<T>({
   model,
   parts,
 }: {
   model: string;
   parts: GeminiPart[];
-}): Promise<T> {
+}): Promise<{ data: T; usage: GeminiUsage }> {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
 
   if (!apiKey) {
@@ -69,5 +80,20 @@ export async function generateGeminiJson<T>({
     throw new Error("Gemini returned an empty response.");
   }
 
-  return JSON.parse(text) as T;
+  return {
+    data: JSON.parse(text) as T,
+    usage: {
+      promptTokenCount: payload.usageMetadata?.promptTokenCount ?? 0,
+      candidatesTokenCount: payload.usageMetadata?.candidatesTokenCount ?? 0,
+      totalTokenCount: payload.usageMetadata?.totalTokenCount ?? 0,
+    },
+  };
+}
+
+export async function generateGeminiJson<T>(input: {
+  model: string;
+  parts: GeminiPart[];
+}): Promise<T> {
+  const { data } = await generateGeminiJsonWithUsage<T>(input);
+  return data;
 }

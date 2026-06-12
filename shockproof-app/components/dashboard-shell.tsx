@@ -6,14 +6,17 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Camera,
+  Cpu,
   Fingerprint,
   Gauge,
+  History,
   ImageIcon,
   LayoutDashboard,
   LoaderCircle,
   LogOut,
   Settings,
   Sparkles,
+  Trash2,
   Upload,
   Video,
 } from "lucide-react";
@@ -71,6 +74,27 @@ type MeterReading = {
   display_type: string | null;
   ai_notes: string | null;
   error_message: string | null;
+  created_at?: string | null;
+};
+
+type UsageEvent = {
+  id: number;
+  model: string;
+  purpose: string;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  total_tokens: number | null;
+  estimated_cost_usd: number | null;
+  created_at: string;
+};
+
+type UsageSummary = {
+  calls: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  estimatedCostUsd: number;
+  recentEvents: UsageEvent[];
 };
 
 const permissions = [
@@ -80,16 +104,41 @@ const permissions = [
   ["AI advice", "Lets ShockProof generate localized savings guidance from tariff math."],
 ];
 
+function formatReadingDate(value?: string | null) {
+  if (!value) {
+    return "Just now";
+  }
+
+  return new Date(value).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
+function formatCost(value: number) {
+  return `$${value.toFixed(value >= 0.01 ? 2 : 5)}`;
+}
+
 export function DashboardShell() {
   const router = useRouter();
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [userId, setUserId] = useState("");
   const [latestReading, setLatestReading] = useState<MeterReading | null>(null);
+  const [readingHistory, setReadingHistory] = useState<MeterReading[]>([]);
+  const [usageSummary, setUsageSummary] = useState<UsageSummary>({
+    calls: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+    estimatedCostUsd: 0,
+    recentEvents: [],
+  });
   const [selectedState, setSelectedState] = useState("");
   const [captureFileName, setCaptureFileName] = useState("");
   const [captureStatus, setCaptureStatus] = useState("");
   const [activeTab, setActiveTab] = useState<AppTab>("dashboard");
   const [isUploadingCapture, setIsUploadingCapture] = useState(false);
+  const [deletingReadingId, setDeletingReadingId] = useState<number | null>(null);
   const [isPasskeyPending, setIsPasskeyPending] = useState(false);
   const [passkeyStatus, setPasskeyStatus] = useState("");
   const suggestedDiscoms = selectedState
@@ -136,17 +185,50 @@ export function DashboardShell() {
     const { data: readings } = await supabase
       .from("meter_readings")
       .select(
-        "id, status, image_url, storage_path, reading_kwh, confidence, display_type, ai_notes, error_message"
+        "id, status, image_url, storage_path, reading_kwh, confidence, display_type, ai_notes, error_message, created_at"
       )
       .eq("user_id", currentUserId)
       .order("id", { ascending: false })
       .limit(10);
+    const typedReadings = (readings as MeterReading[] | null) ?? [];
     const reading =
-      readings?.find((item) => item.status === "processed" && item.reading_kwh) ??
-      readings?.[0] ??
+      typedReadings.find((item) => item.status === "processed" && item.reading_kwh) ??
+      typedReadings[0] ??
       null;
 
-    setLatestReading((reading as MeterReading | null) ?? null);
+    setReadingHistory(typedReadings);
+    setLatestReading(reading);
+
+    const { data: usageEvents } = await supabase
+      .from("ai_usage_events")
+      .select(
+        "id, model, purpose, prompt_tokens, completion_tokens, total_tokens, estimated_cost_usd, created_at"
+      )
+      .eq("user_id", currentUserId)
+      .order("created_at", { ascending: false })
+      .limit(50);
+    const typedEvents = (usageEvents as UsageEvent[] | null) ?? [];
+
+    setUsageSummary({
+      calls: typedEvents.length,
+      promptTokens: typedEvents.reduce(
+        (total, event) => total + (event.prompt_tokens ?? 0),
+        0
+      ),
+      completionTokens: typedEvents.reduce(
+        (total, event) => total + (event.completion_tokens ?? 0),
+        0
+      ),
+      totalTokens: typedEvents.reduce(
+        (total, event) => total + (event.total_tokens ?? 0),
+        0
+      ),
+      estimatedCostUsd: typedEvents.reduce(
+        (total, event) => total + (event.estimated_cost_usd ?? 0),
+        0
+      ),
+      recentEvents: typedEvents.slice(0, 6),
+    });
   }, []);
 
   useEffect(() => {
@@ -230,6 +312,34 @@ export function DashboardShell() {
     setPasskeyStatus(
       "Passkey added. Next time you can use Continue with passkey on the login screen."
     );
+  }
+
+  async function deleteReading(readingId: number) {
+    if (!userId) {
+      return;
+    }
+
+    setDeletingReadingId(readingId);
+    setCaptureStatus("");
+
+    const response = await fetch(`/api/readings/${readingId}`, {
+      method: "DELETE",
+    });
+    const payload = await response.json();
+
+    setDeletingReadingId(null);
+
+    if (!response.ok) {
+      setCaptureStatus(payload.error ?? "Could not delete reading.");
+      return;
+    }
+
+    if (latestReading?.id === readingId) {
+      setCaptureFileName("");
+      setCaptureStatus("Reading deleted.");
+    }
+
+    await loadLatestReading(userId);
   }
 
   async function handleCaptureFile(file?: File) {
@@ -332,7 +442,7 @@ export function DashboardShell() {
         <div>
           <div className="mx-auto mb-4 grid size-12 place-items-center rounded-full bg-white/10 text-white">
             <Image
-              src="/shockproof-logo.png"
+              src="/shockproof-mark.svg"
               alt=""
               width={48}
               height={48}
@@ -354,7 +464,7 @@ export function DashboardShell() {
         <header className="flex items-center justify-between rounded-2xl border border-white/10 bg-card/70 px-4 py-3 shadow-2xl backdrop-blur-xl">
           <div className="flex items-center gap-3">
             <Image
-              src="/shockproof-logo.png"
+              src="/shockproof-mark.svg"
               alt=""
               width={40}
               height={40}
@@ -507,6 +617,66 @@ export function DashboardShell() {
                   </Card>
                 ))}
               </div>
+
+              <Card className="border-white/10 bg-card/70">
+                <CardHeader>
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <CardDescription>Saved readings</CardDescription>
+                      <CardTitle className="text-2xl font-extrabold">
+                        History
+                      </CardTitle>
+                    </div>
+                    <History className="size-5 text-muted-foreground" />
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {readingHistory.length > 0 ? (
+                    readingHistory.map((reading) => (
+                      <div
+                        key={reading.id}
+                        className="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/5 p-4 sm:flex-row sm:items-center sm:justify-between"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="font-bold">
+                              {reading.reading_kwh
+                                ? `${Math.round(reading.reading_kwh)} kWh`
+                                : "Pending OCR"}
+                            </p>
+                            <Badge variant="secondary">{reading.status}</Badge>
+                          </div>
+                          <p className="mt-1 truncate text-sm text-muted-foreground">
+                            {formatReadingDate(reading.created_at)} -{" "}
+                            {reading.ai_notes ??
+                              reading.error_message ??
+                              reading.storage_path}
+                          </p>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="gap-2 text-muted-foreground hover:text-destructive sm:w-auto"
+                          disabled={deletingReadingId === reading.id}
+                          onClick={() => void deleteReading(reading.id)}
+                        >
+                          {deletingReadingId === reading.id ? (
+                            <LoaderCircle className="size-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="size-4" />
+                          )}
+                          Delete
+                        </Button>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="rounded-xl border border-white/10 bg-white/5 p-4 text-sm font-medium text-muted-foreground">
+                      No saved readings yet.
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
             </section>
             ) : null}
 
@@ -601,6 +771,25 @@ export function DashboardShell() {
                         : "Use photo for a clear kWh display, video when the meter cycles through screens, or gallery upload for an existing clip."}
                     </AlertDescription>
                   </Alert>
+                  {latestReading ? (
+                    <div className="flex justify-end">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="gap-2"
+                        disabled={deletingReadingId === latestReading.id}
+                        onClick={() => void deleteReading(latestReading.id)}
+                      >
+                        {deletingReadingId === latestReading.id ? (
+                          <LoaderCircle className="size-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="size-4" />
+                        )}
+                        Delete capture
+                      </Button>
+                    </div>
+                  ) : null}
                 </CardContent>
               </Card>
             </section>
@@ -672,6 +861,78 @@ export function DashboardShell() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="grid gap-6">
+                  <section className="grid gap-3">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <h3 className="text-xl font-bold">Model usage</h3>
+                        <p className="text-sm text-muted-foreground">
+                          App-tracked Gemini calls and estimated spend.
+                        </p>
+                      </div>
+                      <Cpu className="size-5 text-muted-foreground" />
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                      {[
+                        ["Calls", usageSummary.calls.toString(), "Gemini requests"],
+                        [
+                          "Input",
+                          usageSummary.promptTokens.toLocaleString(),
+                          "prompt tokens",
+                        ],
+                        [
+                          "Output",
+                          usageSummary.completionTokens.toLocaleString(),
+                          "response tokens",
+                        ],
+                        [
+                          "Estimate",
+                          formatCost(usageSummary.estimatedCostUsd),
+                          "not billing balance",
+                        ],
+                      ].map(([label, value, hint]) => (
+                        <div
+                          key={label}
+                          className="rounded-xl border border-white/10 bg-white/5 p-4"
+                        >
+                          <p className="text-sm font-medium text-muted-foreground">
+                            {label}
+                          </p>
+                          <p className="mt-2 text-2xl font-extrabold">
+                            {value}
+                          </p>
+                          <p className="mt-1 text-xs font-medium text-muted-foreground">
+                            {hint}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="grid gap-2">
+                      {usageSummary.recentEvents.length > 0 ? (
+                        usageSummary.recentEvents.map((event) => (
+                          <div
+                            key={event.id}
+                            className="flex flex-col gap-1 rounded-xl border border-white/10 bg-white/5 p-3 text-sm sm:flex-row sm:items-center sm:justify-between"
+                          >
+                            <div>
+                              <p className="font-bold">{event.model}</p>
+                              <p className="text-muted-foreground">
+                                {event.purpose} -{" "}
+                                {(event.total_tokens ?? 0).toLocaleString()} tokens
+                              </p>
+                            </div>
+                            <p className="font-bold">
+                              {formatCost(event.estimated_cost_usd ?? 0)}
+                            </p>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="rounded-xl border border-white/10 bg-white/5 p-4 text-sm font-medium text-muted-foreground">
+                          Usage appears here after OCR or advice calls.
+                        </p>
+                      )}
+                    </div>
+                  </section>
+
                   <section className="grid gap-3">
                     <div>
                       <h3 className="text-xl font-bold">User info</h3>

@@ -10,7 +10,7 @@ export default function LoginPage() {
       <div className="flex w-full max-w-sm flex-col gap-6">
         <Link href="/" className="flex items-center gap-2 self-center font-medium">
           <Image
-            src="/shockproof-logo.png"
+            src="/shockproof-mark.svg"
             alt=""
             width={32}
             height={32}

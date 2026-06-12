@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 
-import { generateGeminiJson } from "@/lib/gemini";
+import {
+  type GeminiUsage,
+  generateGeminiJsonWithUsage,
+} from "@/lib/gemini";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -79,6 +82,53 @@ function getOcrPrompt({ retryValue }: { retryValue?: number | null } = {}) {
   ].join(" ");
 }
 
+function estimateCostUsd(model: string, usage: GeminiUsage) {
+  const normalizedModel = model.toLowerCase();
+  const rates = normalizedModel.includes("3.1-flash-lite")
+    ? { input: 0.45, output: 1.5 }
+    : { input: 0.1, output: 0.4 };
+
+  return (
+    (usage.promptTokenCount / 1_000_000) * rates.input +
+    (usage.candidatesTokenCount / 1_000_000) * rates.output
+  );
+}
+
+async function recordUsage({
+  admin,
+  userId,
+  readingId,
+  model,
+  purpose,
+  usage,
+}: {
+  admin: ReturnType<typeof createAdminClient>;
+  userId: string;
+  readingId: number;
+  model: string;
+  purpose: string;
+  usage: GeminiUsage;
+}) {
+  try {
+    await admin
+      .from("ai_usage_events")
+      .insert({
+        user_id: userId,
+        reading_id: readingId,
+        provider: "gemini",
+        model,
+        purpose,
+        prompt_tokens: usage.promptTokenCount,
+        completion_tokens: usage.candidatesTokenCount,
+        total_tokens: usage.totalTokenCount,
+        estimated_cost_usd: estimateCostUsd(model, usage),
+      })
+      .throwOnError();
+  } catch {
+    // Usage tracking should never block meter processing.
+  }
+}
+
 export async function POST(request: Request) {
   const { readingId } = (await request.json()) as ProcessRequest;
 
@@ -140,7 +190,7 @@ export async function POST(request: Request) {
         },
       },
     ];
-    let ocr = await generateGeminiJson<OcrResult>({
+    const initialOcr = await generateGeminiJsonWithUsage<OcrResult>({
       model: ocrModel,
       parts: [
         {
@@ -148,6 +198,15 @@ export async function POST(request: Request) {
         },
         ...ocrParts,
       ],
+    });
+    let ocr = initialOcr.data;
+    await recordUsage({
+      admin,
+      userId: user.id,
+      readingId: reading.id,
+      model: ocrModel,
+      purpose: "meter_ocr",
+      usage: initialOcr.usage,
     });
 
     let readingKwh = parseMeterReading(ocr);
@@ -159,7 +218,7 @@ export async function POST(request: Request) {
         process.env.GEMINI_ADVICE_MODEL ??
         "gemini-3.1-flash-lite";
 
-      ocr = await generateGeminiJson<OcrResult>({
+      const reviewOcr = await generateGeminiJsonWithUsage<OcrResult>({
         model: reviewModel,
         parts: [
           {
@@ -167,6 +226,15 @@ export async function POST(request: Request) {
           },
           ...ocrParts,
         ],
+      });
+      ocr = reviewOcr.data;
+      await recordUsage({
+        admin,
+        userId: user.id,
+        readingId: reading.id,
+        model: reviewModel,
+        purpose: "meter_ocr_review",
+        usage: reviewOcr.usage,
       });
       readingKwh = parseMeterReading(ocr);
     }
