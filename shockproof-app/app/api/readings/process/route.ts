@@ -12,7 +12,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
 type ProcessRequest = {
-  readingId?: number;
+  readingId?: number | string;
   settings?: {
     state?: string;
     discom?: string;
@@ -46,6 +46,8 @@ type AdviceResult = {
   risk_note?: string;
   assumptions?: string[];
 };
+
+type ReadingId = number | string;
 
 const fallbackDomesticSlabs: TariffSlab[] = [
   { slab_start: 0, slab_end: 100, rate: 4.5, fixed_charge: 100 },
@@ -168,7 +170,7 @@ async function recordUsage({
 }: {
   admin: ReturnType<typeof createAdminClient>;
   userId: string;
-  readingId: number;
+  readingId: ReadingId;
   model: string;
   purpose: string;
   usage: GeminiUsage;
@@ -244,18 +246,23 @@ async function loadPreviousReading({
 }: {
   admin: ReturnType<typeof createAdminClient>;
   userId: string;
-  readingId: number;
+  readingId: string;
 }) {
-  const { data } = await admin
+  const numericReadingId = Number(readingId);
+  let query = admin
     .from("meter_readings")
     .select("reading_kwh")
     .eq("user_id", userId)
     .eq("status", "processed")
     .not("reading_kwh", "is", null)
-    .lt("id", readingId)
-    .order("id", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .neq("id", readingId)
+    .limit(1);
+
+  query = Number.isFinite(numericReadingId)
+    ? query.lt("id", numericReadingId).order("id", { ascending: false })
+    : query.order("created_at", { ascending: false });
+
+  const { data } = await query.maybeSingle();
 
   return data?.reading_kwh === null || data?.reading_kwh === undefined
     ? null
@@ -295,8 +302,9 @@ function getAdvicePrompt({
 
 export async function POST(request: Request) {
   const { readingId, settings } = (await request.json()) as ProcessRequest;
+  const normalizedReadingId = String(readingId ?? "").trim();
 
-  if (!readingId) {
+  if (!normalizedReadingId) {
     return NextResponse.json({ error: "readingId is required." }, { status: 400 });
   }
 
@@ -314,7 +322,7 @@ export async function POST(request: Request) {
   const { data: reading, error: readingError } = await admin
     .from("meter_readings")
     .select("id, user_id, storage_path, image_url, status")
-    .eq("id", readingId)
+    .eq("id", normalizedReadingId)
     .single();
 
   if (readingError || !reading || reading.user_id !== user.id) {
@@ -432,7 +440,7 @@ export async function POST(request: Request) {
     const previousReadingKwh = await loadPreviousReading({
       admin,
       userId: user.id,
-      readingId: reading.id,
+      readingId: String(reading.id),
     });
     const { slabs, source: tariffSource } = await loadTariffSlabs({
       admin,

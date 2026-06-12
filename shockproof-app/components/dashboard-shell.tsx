@@ -64,8 +64,10 @@ const appTabs = [
 
 type AppTab = (typeof appTabs)[number]["value"];
 
+type ReadingId = number | string;
+
 type MeterReading = {
-  id: number;
+  id: ReadingId;
   status: ReadingStatus;
   image_url: string;
   storage_path: string | null;
@@ -389,7 +391,7 @@ export function DashboardShell() {
   const [manualReading, setManualReading] = useState("");
   const [activeTab, setActiveTab] = useState<AppTab>("dashboard");
   const [isUploadingCapture, setIsUploadingCapture] = useState(false);
-  const [deletingReadingId, setDeletingReadingId] = useState<number | null>(null);
+  const [deletingReadingId, setDeletingReadingId] = useState<ReadingId | null>(null);
   const [isSavingManualReading, setIsSavingManualReading] = useState(false);
   const [isPasskeyPending, setIsPasskeyPending] = useState(false);
   const [passkeyStatus, setPasskeyStatus] = useState("");
@@ -749,7 +751,7 @@ export function DashboardShell() {
     );
   }
 
-  async function deleteReading(readingId: number) {
+  async function deleteReading(readingId: ReadingId) {
     if (!userId) {
       return;
     }
@@ -777,7 +779,7 @@ export function DashboardShell() {
     await loadLatestReading(userId);
   }
 
-  async function saveManualReading(readingId: number) {
+  async function saveManualReading(readingId: ReadingId) {
     if (!userId) {
       return;
     }

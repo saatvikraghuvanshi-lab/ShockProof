@@ -33,6 +33,8 @@ type AdviceResult = {
   assumptions?: string[];
 };
 
+type ReadingId = number | string;
+
 const fallbackDomesticSlabs: TariffSlab[] = [
   { slab_start: 0, slab_end: 100, rate: 4.5, fixed_charge: 100 },
   { slab_start: 100, slab_end: 200, rate: 6, fixed_charge: 100 },
@@ -77,7 +79,7 @@ async function recordUsage({
 }: {
   admin: ReturnType<typeof createAdminClient>;
   userId: string;
-  readingId: number;
+  readingId: ReadingId;
   model: string;
   purpose: string;
   usage: GeminiUsage;
@@ -109,18 +111,23 @@ async function loadPreviousReading({
 }: {
   admin: ReturnType<typeof createAdminClient>;
   userId: string;
-  readingId: number;
+  readingId: string;
 }) {
-  const { data } = await admin
+  const numericReadingId = Number(readingId);
+  let query = admin
     .from("meter_readings")
     .select("reading_kwh")
     .eq("user_id", userId)
     .eq("status", "processed")
     .not("reading_kwh", "is", null)
-    .lt("id", readingId)
-    .order("id", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .neq("id", readingId)
+    .limit(1);
+
+  query = Number.isFinite(numericReadingId)
+    ? query.lt("id", numericReadingId).order("id", { ascending: false })
+    : query.order("created_at", { ascending: false });
+
+  const { data } = await query.maybeSingle();
 
   return data?.reading_kwh === null || data?.reading_kwh === undefined
     ? null
@@ -192,14 +199,18 @@ function getAdvicePrompt({
 
 export async function PATCH(request: Request, context: RouteContext) {
   const { id } = await context.params;
-  const readingId = Number(id);
+  const readingId = String(id ?? "").trim();
   const body = (await request.json()) as {
     reading_kwh?: number | string;
     settings?: ReadingSettings;
   };
   const readingKwh = parseKwhInput(body.reading_kwh);
 
-  if (!Number.isFinite(readingId) || readingKwh === null) {
+  if (!readingId) {
+    return NextResponse.json({ error: "Valid reading id is required." }, { status: 400 });
+  }
+
+  if (readingKwh === null) {
     return NextResponse.json({ error: "Valid reading_kwh is required." }, { status: 400 });
   }
 
@@ -313,9 +324,9 @@ export async function PATCH(request: Request, context: RouteContext) {
 
 export async function DELETE(_request: Request, context: RouteContext) {
   const { id } = await context.params;
-  const readingId = Number(id);
+  const readingId = String(id ?? "").trim();
 
-  if (!Number.isFinite(readingId)) {
+  if (!readingId) {
     return NextResponse.json({ error: "Invalid reading id." }, { status: 400 });
   }
 
