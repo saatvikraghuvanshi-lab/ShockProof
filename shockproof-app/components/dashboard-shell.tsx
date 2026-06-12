@@ -66,6 +66,11 @@ type MeterReading = {
   status: ReadingStatus;
   image_url: string;
   storage_path: string | null;
+  reading_kwh: number | null;
+  confidence: number | null;
+  display_type: string | null;
+  ai_notes: string | null;
+  error_message: string | null;
 };
 
 const permissions = [
@@ -95,8 +100,14 @@ export function DashboardShell() {
     () => [
       [
         "Current",
-        "-- kWh",
-        latestReading ? "Capture uploaded" : "Waiting for first meter read",
+        latestReading?.reading_kwh
+          ? `${Math.round(latestReading.reading_kwh)} kWh`
+          : "-- kWh",
+        latestReading?.reading_kwh
+          ? `${Math.round((latestReading.confidence ?? 0) * 100)}% OCR confidence`
+          : latestReading
+            ? "Capture uploaded"
+            : "Waiting for first meter read",
       ],
       [
         "Projected",
@@ -111,7 +122,10 @@ export function DashboardShell() {
       [
         "Status",
         latestReading?.status ?? "Ready",
-        latestReading?.storage_path ?? "Start with meter capture",
+        latestReading?.error_message ??
+          latestReading?.ai_notes ??
+          latestReading?.storage_path ??
+          "Start with meter capture",
       ],
     ],
     [latestReading]
@@ -121,7 +135,9 @@ export function DashboardShell() {
     const supabase = createClient();
     const { data: reading } = await supabase
       .from("meter_readings")
-      .select("id, status, image_url, storage_path")
+      .select(
+        "id, status, image_url, storage_path, reading_kwh, confidence, display_type, ai_notes, error_message"
+      )
       .eq("user_id", currentUserId)
       .order("id", { ascending: false })
       .limit(1)
@@ -268,7 +284,9 @@ export function DashboardShell() {
         status: "uploaded",
         user_id: userId,
       })
-      .select("id, status, image_url, storage_path")
+      .select(
+        "id, status, image_url, storage_path, reading_kwh, confidence, display_type, ai_notes, error_message"
+      )
       .single();
 
     if (readingError || !reading) {
@@ -419,13 +437,25 @@ export function DashboardShell() {
                       </div>
                       <div>
                         <p className="text-sm font-bold text-destructive">
-                          {latestReading ? "Capture uploaded" : "Awaiting meter reading"}
+                          {latestReading?.reading_kwh
+                            ? "Gemini OCR complete"
+                            : latestReading
+                              ? "Capture uploaded"
+                              : "Awaiting meter reading"}
                         </p>
                         <h2 className="text-2xl font-extrabold">
-                          {latestReading ? "Ready for OCR" : "No reading yet"}
+                          {latestReading?.reading_kwh
+                            ? `${Math.round(latestReading.reading_kwh)} kWh extracted`
+                            : latestReading
+                              ? "Ready for OCR"
+                              : "No reading yet"}
                         </h2>
                         <p className="mt-2 text-sm text-muted-foreground">
-                          {latestReading
+                          {latestReading?.reading_kwh
+                            ? `${latestReading.display_type ?? "kWh"} display detected with ${Math.round(
+                                (latestReading.confidence ?? 0) * 100
+                              )}% confidence.`
+                            : latestReading
                             ? "The capture is stored in Supabase. Gemini extraction is the next pipeline step."
                             : "Record a meter clip to calculate projected usage, slab threshold, and bill-risk trajectory."}
                         </p>
@@ -433,7 +463,7 @@ export function DashboardShell() {
                     </div>
                     <Progress
                       value={
-                        latestReading ? 35 : 0
+                        latestReading?.reading_kwh ? 65 : latestReading ? 35 : 0
                       }
                     />
                   </CardContent>
@@ -442,10 +472,16 @@ export function DashboardShell() {
                 <Alert className="border-accent/30 bg-accent/10">
                   <Gauge className="size-4" />
                   <AlertTitle>
-                    {latestReading ? "Supabase upload ready" : "Ready for first capture"}
+                    {latestReading?.reading_kwh
+                      ? "Gemini OCR saved"
+                      : latestReading
+                        ? "Supabase upload ready"
+                        : "Ready for first capture"}
                   </AlertTitle>
                   <AlertDescription>
-                    {latestReading?.storage_path ??
+                    {latestReading?.error_message ??
+                      latestReading?.ai_notes ??
+                      latestReading?.storage_path ??
                       "Connect state, Discom, and billing cycle before generating slab-aware advice."}
                   </AlertDescription>
                 </Alert>

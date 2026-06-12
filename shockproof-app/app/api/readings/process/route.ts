@@ -67,7 +67,7 @@ export async function POST(request: Request) {
 
     const mimeType = fileData.type || "image/jpeg";
     const base64 = Buffer.from(await fileData.arrayBuffer()).toString("base64");
-    const ocrModel = process.env.GEMINI_OCR_MODEL ?? "gemini-3.1-flash-lite";
+    const ocrModel = process.env.GEMINI_OCR_MODEL ?? "gemini-2.5-flash-lite";
     const ocr = await generateGeminiJson<OcrResult>({
       model: ocrModel,
       parts: [
@@ -93,6 +93,12 @@ export async function POST(request: Request) {
     await admin
       .from("meter_readings")
       .update({
+        reading_kwh: readingKwh,
+        confidence: ocr.confidence ?? null,
+        display_type: ocr.display_type ?? "kWh",
+        processed_at: new Date().toISOString(),
+        ai_notes: ocr.notes ?? null,
+        error_message: null,
         status: "processed",
       })
       .eq("id", reading.id);
