@@ -279,6 +279,17 @@ function getBillingCycleDay(option: string, customDay: string) {
   return match ? Number(match[0]) : null;
 }
 
+function parseKwhInput(value: string) {
+  const match = value.replace(/,/g, "").match(/\d+(?:\.\d+)?/);
+
+  if (!match) {
+    return null;
+  }
+
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
 function isAmbiguousProcessedReading(reading?: MeterReading | null) {
   if (!reading || reading.status !== "processed" || !reading.reading_kwh) {
     return false;
@@ -771,10 +782,10 @@ export function DashboardShell() {
       return;
     }
 
-    const readingKwh = Number(manualReading);
+    const readingKwh = parseKwhInput(manualReading);
 
-    if (!Number.isFinite(readingKwh) || readingKwh < 0) {
-      setCaptureStatus("Enter a valid kWh number.");
+    if (readingKwh === null) {
+      setCaptureStatus("Enter a valid kWh number, like 211008 or 211008 kWh.");
       return;
     }
 

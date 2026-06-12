@@ -40,6 +40,21 @@ const fallbackDomesticSlabs: TariffSlab[] = [
   { slab_start: 400, slab_end: null, rate: 10, fixed_charge: 100 },
 ];
 
+function parseKwhInput(value: number | string | undefined) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  }
+
+  const match = String(value ?? "").replace(/,/g, "").match(/\d+(?:\.\d+)?/);
+
+  if (!match) {
+    return null;
+  }
+
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
 function estimateCostUsd(model: string, usage: GeminiUsage) {
   const normalizedModel = model.toLowerCase();
   const rates = normalizedModel.includes("3.1-flash-lite")
@@ -182,9 +197,9 @@ export async function PATCH(request: Request, context: RouteContext) {
     reading_kwh?: number | string;
     settings?: ReadingSettings;
   };
-  const readingKwh = Number(body.reading_kwh);
+  const readingKwh = parseKwhInput(body.reading_kwh);
 
-  if (!Number.isFinite(readingId) || !Number.isFinite(readingKwh) || readingKwh < 0) {
+  if (!Number.isFinite(readingId) || readingKwh === null) {
     return NextResponse.json({ error: "Valid reading_kwh is required." }, { status: 400 });
   }
 
