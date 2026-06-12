@@ -61,35 +61,12 @@ const appTabs = [
 
 type AppTab = (typeof appTabs)[number]["value"];
 
-type Household = {
-  id: string;
-  state: string;
-  discom: string;
-  billing_cycle_day: number | null;
-};
-
 type MeterReading = {
-  id: string;
+  id: number;
   status: ReadingStatus;
-  reading_kwh: number | null;
-  confidence: number | null;
-  captured_at: string;
-  error_message: string | null;
-};
-
-type ReadingProjection = {
-  current_usage: number | null;
-  projected_units: number | null;
-  next_slab_at: number | null;
-  units_to_next_slab: number | null;
-  estimated_bill: number | null;
-  estimated_delta: number | null;
-  bill_risk: "low" | "medium" | "high" | null;
-  advice_json: {
-    title?: string;
-    message?: string;
-    actions?: string[];
-  } | null;
+  image_url: string;
+  storage_path: string | null;
+  created_at: string;
 };
 
 const permissions = [
@@ -103,10 +80,7 @@ export function DashboardShell() {
   const router = useRouter();
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [userId, setUserId] = useState("");
-  const [household, setHousehold] = useState<Household | null>(null);
   const [latestReading, setLatestReading] = useState<MeterReading | null>(null);
-  const [latestProjection, setLatestProjection] =
-    useState<ReadingProjection | null>(null);
   const [selectedState, setSelectedState] = useState("");
   const [captureFileName, setCaptureFileName] = useState("");
   const [captureStatus, setCaptureStatus] = useState("");
@@ -122,70 +96,41 @@ export function DashboardShell() {
     () => [
       [
         "Current",
-        latestProjection?.current_usage !== null &&
-        latestProjection?.current_usage !== undefined
-          ? `${Math.round(latestProjection.current_usage)} kWh`
-          : latestReading?.reading_kwh
-            ? `${Math.round(latestReading.reading_kwh)} kWh`
-            : "-- kWh",
-        latestReading?.captured_at
-          ? `Captured ${new Date(latestReading.captured_at).toLocaleDateString()}`
+        "-- kWh",
+        latestReading?.created_at
+          ? `Uploaded ${new Date(latestReading.created_at).toLocaleDateString()}`
           : "Waiting for first meter read",
       ],
       [
         "Projected",
-        latestProjection?.projected_units
-          ? `${Math.round(latestProjection.projected_units)} kWh`
-          : "--",
-        latestProjection ? "Month-end projection" : "Needs Discom tariff rules",
+        "--",
+        "Gemini OCR is next",
       ],
       [
         "Next slab",
-        latestProjection?.units_to_next_slab !== null &&
-        latestProjection?.units_to_next_slab !== undefined
-          ? `${Math.round(latestProjection.units_to_next_slab)} kWh`
-          : "--",
-        latestProjection?.next_slab_at
-          ? `Threshold ${Math.round(latestProjection.next_slab_at)} kWh`
-          : "Set billing cycle first",
+        "--",
+        "Projection starts after OCR",
       ],
       [
         "Status",
         latestReading?.status ?? "Ready",
-        latestReading?.error_message ?? "Start with meter capture",
+        latestReading?.storage_path ?? "Start with meter capture",
       ],
     ],
-    [latestProjection, latestReading]
+    [latestReading]
   );
 
-  const loadLatestForHousehold = useCallback(async (householdId: string) => {
+  const loadLatestReading = useCallback(async (currentUserId: string) => {
     const supabase = createClient();
     const { data: reading } = await supabase
       .from("meter_readings")
-      .select("id, status, reading_kwh, confidence, captured_at, error_message")
-      .eq("household_id", householdId)
-      .order("captured_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    setLatestReading((reading as MeterReading | null) ?? null);
-
-    if (!reading?.id) {
-      setLatestProjection(null);
-      return;
-    }
-
-    const { data: projection } = await supabase
-      .from("reading_projections")
-      .select(
-        "current_usage, projected_units, next_slab_at, units_to_next_slab, estimated_bill, estimated_delta, bill_risk, advice_json"
-      )
-      .eq("reading_id", reading.id)
+      .select("id, status, image_url, storage_path, created_at")
+      .eq("user_id", currentUserId)
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
 
-    setLatestProjection((projection as ReadingProjection | null) ?? null);
+    setLatestReading((reading as MeterReading | null) ?? null);
   }, []);
 
   useEffect(() => {
@@ -202,45 +147,16 @@ export function DashboardShell() {
       }
 
       setUserId(session.user.id);
-
-      const { data: existingHousehold } = await supabase
-        .from("households")
-        .select("id, state, discom, billing_cycle_day")
-        .eq("owner_id", session.user.id)
-        .order("created_at", { ascending: true })
-        .limit(1)
-        .maybeSingle();
-      const resolvedHousehold =
-        existingHousehold ??
-        (
-          await supabase
-            .from("households")
-            .insert({
-              owner_id: session.user.id,
-              household_name: "Home",
-              state: "Karnataka",
-              discom: "bescom",
-              billing_cycle_day: 1,
-            })
-            .select("id, state, discom, billing_cycle_day")
-            .single()
-        ).data;
-
-      if (resolvedHousehold) {
-        const typedHousehold = resolvedHousehold as Household;
-        setHousehold(typedHousehold);
-        setSelectedState(typedHousehold.state);
-        await loadLatestForHousehold(typedHousehold.id);
-      }
+      await loadLatestReading(session.user.id);
 
       setIsCheckingAuth(false);
     }
 
     void checkSession();
-  }, [loadLatestForHousehold, router]);
+  }, [loadLatestReading, router]);
 
   useEffect(() => {
-    if (!userId || !household?.id) {
+    if (!userId) {
       return;
     }
 
@@ -253,25 +169,16 @@ export function DashboardShell() {
           event: "*",
           schema: "public",
           table: "meter_readings",
-          filter: `captured_by=eq.${userId}`,
+          filter: `user_id=eq.${userId}`,
         },
-        () => void loadLatestForHousehold(household.id)
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "reading_projections",
-        },
-        () => void loadLatestForHousehold(household.id)
+        () => void loadLatestReading(userId)
       )
       .subscribe();
 
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [household?.id, loadLatestForHousehold, userId]);
+  }, [loadLatestReading, userId]);
 
   async function signOut() {
     const supabase = createClient();
@@ -310,8 +217,8 @@ export function DashboardShell() {
     setCaptureFileName(file.name);
     setCaptureStatus("");
 
-    if (!household || !userId) {
-      setCaptureStatus("Household setup is still loading. Try again in a moment.");
+    if (!userId) {
+      setCaptureStatus("Account session is still loading. Try again in a moment.");
       return;
     }
 
@@ -326,19 +233,38 @@ export function DashboardShell() {
     }
 
     setIsUploadingCapture(true);
-    setCaptureStatus("Creating meter reading...");
+    setCaptureStatus("Uploading capture...");
 
     const supabase = createClient();
-    const fileType = file.type.startsWith("video/") ? "video" : "image";
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "-");
+    const filePath = `${userId}/${Date.now()}-${safeName}`;
+    const { error: uploadError } = await supabase.storage
+      .from("meter-captures")
+      .upload(filePath, file, {
+        contentType: file.type,
+        upsert: false,
+      });
+
+    if (uploadError) {
+      setCaptureStatus(uploadError.message);
+      setIsUploadingCapture(false);
+      return;
+    }
+
+    setCaptureStatus("Creating meter reading...");
+
+    const {
+      data: { publicUrl },
+    } = supabase.storage.from("meter-captures").getPublicUrl(filePath);
     const { data: reading, error: readingError } = await supabase
       .from("meter_readings")
       .insert({
-        household_id: household.id,
-        captured_by: userId,
-        file_type: fileType,
-        status: "uploading",
+        image_url: publicUrl,
+        storage_path: filePath,
+        status: "uploaded",
+        user_id: userId,
       })
-      .select("id, status, reading_kwh, confidence, captured_at, error_message")
+      .select("id, status, image_url, storage_path, created_at")
       .single();
 
     if (readingError || !reading) {
@@ -348,34 +274,6 @@ export function DashboardShell() {
     }
 
     setLatestReading(reading as MeterReading);
-    setCaptureStatus("Uploading capture...");
-
-    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "-");
-    const filePath = `${userId}/${household.id}/${reading.id}/${Date.now()}-${safeName}`;
-    const { error: uploadError } = await supabase.storage
-      .from("meter-captures")
-      .upload(filePath, file, {
-        contentType: file.type,
-        upsert: false,
-      });
-
-    if (uploadError) {
-      await supabase
-        .from("meter_readings")
-        .update({ status: "failed", error_message: uploadError.message })
-        .eq("id", reading.id);
-      setCaptureStatus(uploadError.message);
-      setIsUploadingCapture(false);
-      return;
-    }
-
-    await supabase
-      .from("meter_readings")
-      .update({
-        file_path: filePath,
-        status: "uploaded",
-      })
-      .eq("id", reading.id);
 
     setCaptureStatus("Uploaded. Extracting kWh with Gemini...");
 
@@ -394,9 +292,13 @@ export function DashboardShell() {
       return;
     }
 
-    setCaptureStatus("Processed. Dashboard updated.");
+    setCaptureStatus(
+      processPayload.reading_kwh
+        ? `Processed. Gemini read ${processPayload.reading_kwh} kWh.`
+        : "Processed. Dashboard updated."
+    );
     setIsUploadingCapture(false);
-    await loadLatestForHousehold(household.id);
+    await loadLatestReading(userId);
   }
 
   if (isCheckingAuth) {
@@ -504,10 +406,7 @@ export function DashboardShell() {
                       <div className="grid size-32 place-items-center rounded-full border border-white/10 bg-white/5">
                         <div className="text-center">
                           <p className="text-3xl font-extrabold">
-                            {latestProjection?.units_to_next_slab !== null &&
-                            latestProjection?.units_to_next_slab !== undefined
-                              ? Math.round(latestProjection.units_to_next_slab)
-                              : "--"}
+                            --
                           </p>
                           <p className="text-xs font-semibold text-muted-foreground">
                             to next slab
@@ -516,37 +415,21 @@ export function DashboardShell() {
                       </div>
                       <div>
                         <p className="text-sm font-bold text-destructive">
-                          {latestProjection?.bill_risk
-                            ? `${latestProjection.bill_risk} bill risk`
-                            : "Awaiting meter reading"}
+                          {latestReading ? "Capture uploaded" : "Awaiting meter reading"}
                         </p>
                         <h2 className="text-2xl font-extrabold">
-                          {latestReading?.reading_kwh
-                            ? `${Math.round(latestReading.reading_kwh)} kWh extracted`
-                            : "No reading yet"}
+                          {latestReading ? "Ready for OCR" : "No reading yet"}
                         </h2>
                         <p className="mt-2 text-sm text-muted-foreground">
-                          {latestProjection
-                            ? `Projected ${Math.round(
-                                latestProjection.projected_units ?? 0
-                              )} kWh with an estimated bill of Rs ${Math.round(
-                                latestProjection.estimated_bill ?? 0
-                              )}.`
+                          {latestReading
+                            ? "The capture is stored in Supabase. Gemini extraction is the next pipeline step."
                             : "Record a meter clip to calculate projected usage, slab threshold, and bill-risk trajectory."}
                         </p>
                       </div>
                     </div>
                     <Progress
                       value={
-                        latestProjection?.next_slab_at &&
-                        latestProjection.current_usage
-                          ? Math.min(
-                              (latestProjection.current_usage /
-                                latestProjection.next_slab_at) *
-                                100,
-                              100
-                            )
-                          : 0
+                        latestReading ? 35 : 0
                       }
                     />
                   </CardContent>
@@ -555,12 +438,10 @@ export function DashboardShell() {
                 <Alert className="border-accent/30 bg-accent/10">
                   <Gauge className="size-4" />
                   <AlertTitle>
-                    {household
-                      ? `${household.state} / ${household.discom}`
-                      : "Ready for first capture"}
+                    {latestReading ? "Supabase upload ready" : "Ready for first capture"}
                   </AlertTitle>
                   <AlertDescription>
-                    {latestReading?.error_message ??
+                    {latestReading?.storage_path ??
                       "Connect state, Discom, and billing cycle before generating slab-aware advice."}
                   </AlertDescription>
                 </Alert>
@@ -694,7 +575,7 @@ export function DashboardShell() {
                       </CardTitle>
                     </div>
                     <Badge variant="secondary">
-                      {latestProjection?.advice_json ? "Ready" : "Pending"}
+                      Pending
                     </Badge>
                   </div>
                 </CardHeader>
@@ -702,22 +583,18 @@ export function DashboardShell() {
                   <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
                     <Sparkles className="mb-4 size-5 text-accent" />
                     <h3 className="text-xl font-extrabold">
-                      {latestProjection?.advice_json?.title ??
-                        "No advice generated yet."}
+                      No advice generated yet.
                     </h3>
                     <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                      {latestProjection?.advice_json?.message ??
-                        "Once a meter reading is processed, ShockProof will show clear household actions, projected savings, and slab-risk warnings here."}
+                      Once a meter reading is processed, ShockProof will show clear household actions, projected savings, and slab-risk warnings here.
                     </p>
                   </div>
                   <div className="grid gap-3">
-                    {(
-                      latestProjection?.advice_json?.actions ?? [
-                        "Advice will appear after the first meter reading",
-                        "Savings actions will use selected Discom rules",
-                        "Follow-up reminder will use the billing cycle date",
-                      ]
-                    ).map((item) => (
+                    {[
+                      "Advice will appear after Gemini OCR is connected",
+                      "Savings actions will use selected Discom rules",
+                      "Follow-up reminder will use the billing cycle date",
+                    ].map((item) => (
                       <label
                         key={item}
                         className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3 text-sm font-semibold text-muted-foreground"
