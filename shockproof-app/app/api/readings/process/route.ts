@@ -69,6 +69,10 @@ function parseMeterReading(ocr: OcrResult, minimumDigits = 5) {
       continue;
     }
 
+    if (/\b\d{1,2}\s*[/-]\s*\d{1,2}(?:\s*[/-]\s*\d{2,4})?\b/.test(text)) {
+      continue;
+    }
+
     const normalized = text.replace(/[^\d.]/g, "");
 
     if (normalized.replace(/\D/g, "").length < minimumDigits) {
@@ -93,6 +97,7 @@ function parseMeterReading(ocr: OcrResult, minimumDigits = 5) {
 }
 
 function isAmbiguousDateLikeReading(ocr: OcrResult, readingKwh: number) {
+  const rawText = String(ocr.raw_display_text ?? "");
   const reviewText = [
     ocr.raw_display_text,
     ocr.display_type,
@@ -102,16 +107,19 @@ function isAmbiguousDateLikeReading(ocr: OcrResult, readingKwh: number) {
     .join(" ")
     .toLowerCase();
 
-  if (ocr.is_partial && readingKwh < 10000) {
+  if (/\b\d{1,2}\s*[/-]\s*\d{1,2}(?:\s*[/-]\s*\d{2,4})?\b/.test(rawText)) {
     return true;
   }
 
-  return (
-    readingKwh < 10000 &&
-    /\b(date|time|ambiguous|ambiguity|provisional|unclear|partial)\b/.test(
-      reviewText
-    )
-  );
+  if (/\b(date-like|time-like|ambiguous|ambiguity|provisional|unclear|partial)\b/.test(reviewText)) {
+    return true;
+  }
+
+  if (/\b(appears? to be|looks like|mimics|rather than)\b/.test(reviewText) && /\b(date|time)\b/.test(reviewText)) {
+    return true;
+  }
+
+  return ocr.is_partial && readingKwh < 10000;
 }
 
 function getOcrPrompt({ retryValue }: { retryValue?: number | null } = {}) {

@@ -785,7 +785,20 @@ export function DashboardShell() {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ reading_kwh: readingKwh }),
+      body: JSON.stringify({
+        reading_kwh: readingKwh,
+        settings: {
+          state: selectedState,
+          discom: selectedDiscom,
+          billingCycleDay: getBillingCycleDay(
+            selectedBillingCycle,
+            customCycleDay
+          ),
+          language: selectedLanguage,
+          useHinglish: featurePreferences.hinglishAdvice,
+          allowAdvice: permissionPreferences.aiAdvice,
+        },
+      }),
     });
     const payload = await response.json();
 
@@ -797,7 +810,11 @@ export function DashboardShell() {
     }
 
     setManualReading("");
-    setCaptureStatus(`Saved ${payload.reading_kwh} kWh manually.`);
+    setCaptureStatus(
+      `Saved ${payload.reading_kwh} kWh manually${
+        payload.advice ? " with projection + advice" : ""
+      }.`
+    );
     await loadLatestReading(userId);
   }
 
