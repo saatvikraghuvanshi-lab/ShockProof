@@ -2,9 +2,13 @@
 
 ShockProof is an AI-powered smart meter tariff guard for Indian households. It helps users capture an electricity meter reading, extract the cumulative kWh value with Gemini OCR, calculate slab and bill-risk projections, and generate practical household advice before usage crosses expensive tariff thresholds.
 <img width="1917" height="910" alt="Image" src="https://github.com/user-attachments/assets/5cac218f-310a-4119-b7f2-664bd85840aa" />
+<img width="1897" height="900" alt="Image" src="https://github.com/user-attachments/assets/df0214a8-fe70-4300-a501-60d3c71ab72c" />
+<img width="1682" height="900" alt="Image" src="https://github.com/user-attachments/assets/afd60d48-85cf-4a63-907c-d04bac6a5063" />
+<img width="1901" height="912" alt="Image" src="https://github.com/user-attachments/assets/20b35134-ce38-4a4f-a206-5ba0d4a3ba54" />
+<img width="1917" height="907" alt="Image" src="https://github.com/user-attachments/assets/1fdc04dd-7b32-4f43-831a-a803f11d20bf" />
 Built for the INDIA.RUNS 2026 Ideathon, Challenge 3: Improve Everyday Life with AI.
 
-Live app: https://shockproof.vercel.app
+Live URL: https://shockproof.vercel.app
 
 ## Ideathon Context
 
