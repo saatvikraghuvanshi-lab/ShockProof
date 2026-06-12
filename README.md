@@ -7,7 +7,7 @@ ShockProof is an AI-powered smart meter tariff guard for Indian households. It h
 <img width="1901" height="912" alt="Image" src="https://github.com/user-attachments/assets/20b35134-ce38-4a4f-a206-5ba0d4a3ba54" />
 <img width="1917" height="907" alt="Image" src="https://github.com/user-attachments/assets/1fdc04dd-7b32-4f43-831a-a803f11d20bf" />
 Built for the INDIA.RUNS 2026 Ideathon, Challenge 3: Improve Everyday Life with AI. 
-Built by team Noble Dawn 
+Built by team Noble Dawn. 
 
 Live URL: https://shockproof.vercel.app
 
@@ -54,6 +54,8 @@ ShockProof/
     public/               ShockProof assets
     supabase/             SQL setup files
 ```
+
+<img width="768" height="768" alt="Image" src="https://github.com/user-attachments/assets/8fefac7b-f416-4845-b410-231152a66b8e" />
 
 ## Local Development
 
