@@ -3,6 +3,7 @@
 -- first it adds the columns the current app needs, then it adds RLS policies.
 
 alter table public.meter_readings
+add column if not exists created_at timestamptz not null default now(),
 add column if not exists image_url text,
 add column if not exists storage_path text,
 add column if not exists status text not null default 'uploaded',

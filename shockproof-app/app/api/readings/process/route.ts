@@ -35,7 +35,7 @@ export async function POST(request: Request) {
 
   const { data: reading, error: readingError } = await admin
     .from("meter_readings")
-    .select("id, user_id, storage_path, image_url, created_at, status")
+    .select("id, user_id, storage_path, image_url, status")
     .eq("id", readingId)
     .single();
 

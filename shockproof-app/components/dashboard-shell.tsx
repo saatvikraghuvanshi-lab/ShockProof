@@ -66,7 +66,6 @@ type MeterReading = {
   status: ReadingStatus;
   image_url: string;
   storage_path: string | null;
-  created_at: string;
 };
 
 const permissions = [
@@ -97,9 +96,7 @@ export function DashboardShell() {
       [
         "Current",
         "-- kWh",
-        latestReading?.created_at
-          ? `Uploaded ${new Date(latestReading.created_at).toLocaleDateString()}`
-          : "Waiting for first meter read",
+        latestReading ? "Capture uploaded" : "Waiting for first meter read",
       ],
       [
         "Projected",
@@ -124,9 +121,9 @@ export function DashboardShell() {
     const supabase = createClient();
     const { data: reading } = await supabase
       .from("meter_readings")
-      .select("id, status, image_url, storage_path, created_at")
+      .select("id, status, image_url, storage_path")
       .eq("user_id", currentUserId)
-      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
       .limit(1)
       .maybeSingle();
 
@@ -264,7 +261,7 @@ export function DashboardShell() {
         status: "uploaded",
         user_id: userId,
       })
-      .select("id, status, image_url, storage_path, created_at")
+      .select("id, status, image_url, storage_path")
       .single();
 
     if (readingError || !reading) {
