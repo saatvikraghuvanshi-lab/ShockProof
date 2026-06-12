@@ -56,7 +56,7 @@ const fallbackDomesticSlabs: TariffSlab[] = [
   { slab_start: 400, slab_end: null, rate: 10, fixed_charge: 100 },
 ];
 
-function parseMeterReading(ocr: OcrResult, minimumDigits = 5) {
+function parseMeterReading(ocr: OcrResult, minimumDigits = 4) {
   if (ocr.is_energy_register === false) {
     return null;
   }
@@ -102,6 +102,7 @@ function parseMeterReading(ocr: OcrResult, minimumDigits = 5) {
 }
 
 function isAmbiguousDateLikeReading(ocr: OcrResult, readingKwh: number) {
+  const confidence = ocr.confidence ?? 0;
   const rawText = String(ocr.raw_display_text ?? "");
   const reviewText = [
     ocr.raw_display_text,
@@ -113,20 +114,47 @@ function isAmbiguousDateLikeReading(ocr: OcrResult, readingKwh: number) {
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
+  const hasEnergyContext =
+    /\b(kwh|import|imp|1\.8\.0|a\+|active energy|cumulative|total)\b/.test(
+      reviewText
+    );
 
-  if (/\b\d{1,2}\s*[/-]\s*\d{1,2}(?:\s*[/-]\s*\d{2,4})?\b/.test(rawText)) {
+  if (
+    ocr.is_energy_register === true &&
+    ocr.is_cumulative_total !== false &&
+    confidence >= 0.7
+  ) {
+    return false;
+  }
+
+  if (readingKwh >= 10000 && confidence >= 0.55 && !ocr.is_partial) {
+    return false;
+  }
+
+  if (
+    /\b\d{1,2}\s*[/-]\s*\d{1,2}(?:\s*[/-]\s*\d{2,4})?\b/.test(rawText) &&
+    !hasEnergyContext
+  ) {
     return true;
   }
 
-  if (/\b(date-like|time-like|ambiguous|ambiguity|provisional|unclear|partial)\b/.test(reviewText)) {
+  if (
+    confidence < 0.75 &&
+    /\b(date-like|time-like|ambiguous|ambiguity|provisional|unclear|partial)\b/.test(reviewText)
+  ) {
     return true;
   }
 
-  if (/\b(appears? to be|looks like|mimics|rather than)\b/.test(reviewText) && /\b(date|time)\b/.test(reviewText)) {
+  if (
+    confidence < 0.75 &&
+    /\b(appears? to be|looks like|mimics|rather than)\b/.test(reviewText) &&
+    /\b(date|time)\b/.test(reviewText) &&
+    !hasEnergyContext
+  ) {
     return true;
   }
 
-  return ocr.is_partial && readingKwh < 10000;
+  return Boolean(ocr.is_partial && confidence < 0.8);
 }
 
 function getOcrPrompt({ retryValue }: { retryValue?: number | null } = {}) {
@@ -136,6 +164,8 @@ function getOcrPrompt({ retryValue }: { retryValue?: number | null } = {}) {
     "Target register priority: Total Import Active Energy kWh, Cumulative kWh, Imp kWh, Import kWh, T kWh, A+ kWh, 1.8.0, or total active energy. For net meters, prefer import kWh over export kWh unless import is not visible.",
     "Do not use instant load kW, voltage V, current A, power factor PF, frequency Hz, balance/credit, prepaid amount, relay status, meter number, serial number, barcode, consumer number, date, month/year, time, demand kVA/kW, export kWh, MD, TOD slot values, or printed labels.",
     "For LCD/video cycling meters, inspect all visible screens and pick the screen that is clearly the cumulative import kWh energy register.",
+    "If a number appears on an LCD next to or under a kWh/Imp/Import/1.8.0/A+ register label, treat it as an energy reading even if the digits could resemble a date. The register label overrides date-like appearance.",
+    "For seven-segment LCDs, preserve all visible digits from left to right. If the LCD shows 211008, return 211008; if it shows 2110.08, return 2110 and preserve 2110.08 in raw_display_text.",
     "For odometer/mechanical meters, read the main black/white digit register as kWh; ignore small red decimal wheels unless needed for rounding.",
     "If the main number includes a decimal point, return reading_kwh rounded to the nearest integer and raw_display_text with the decimal preserved.",
     "If the screen is a date/time/month-year or any non-energy page, set is_energy_register false, reading_kwh null, and explain rejection_reason.",
@@ -521,6 +551,8 @@ export async function POST(request: Request) {
       notes: ocr.notes ?? null,
       projection,
       advice: adviceJson,
+      tariff_source: tariffSource,
+      previous_reading_kwh: previousReadingKwh,
     });
   } catch (error) {
     const message =

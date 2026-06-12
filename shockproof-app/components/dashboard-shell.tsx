@@ -297,10 +297,18 @@ function isAmbiguousProcessedReading(reading?: MeterReading | null) {
     return false;
   }
 
+  if (reading.projected_units !== null || reading.advice_json?.summary) {
+    return false;
+  }
+
+  if ((reading.confidence ?? 0) >= 0.75 && reading.reading_kwh >= 1000) {
+    return false;
+  }
+
   const reviewText = `${reading.ai_notes ?? ""} ${reading.display_type ?? ""}`.toLowerCase();
 
   return (
-    reading.reading_kwh < 10000 &&
+    (reading.confidence ?? 0) < 0.75 &&
     /\b(date|time|ambiguous|ambiguity|provisional|unclear|partial)\b/.test(
       reviewText
     )
@@ -939,6 +947,45 @@ export function DashboardShell() {
         ? `Processed. Gemini read ${processPayload.reading_kwh} kWh and generated projection${processPayload.advice ? " + advice" : ""}.`
         : "Processed. Dashboard updated."
     );
+    setLatestReading((current) => {
+      if (!current || current.id !== reading.id) {
+        return current;
+      }
+
+      return {
+        ...current,
+        status: "processed",
+        reading_kwh: processPayload.reading_kwh ?? current.reading_kwh,
+        confidence: processPayload.confidence ?? current.confidence,
+        display_type: processPayload.display_type ?? current.display_type,
+        ai_notes: processPayload.notes ?? current.ai_notes,
+        error_message: null,
+        current_usage:
+          processPayload.projection?.currentUsage ?? current.current_usage,
+        projected_units:
+          processPayload.projection?.projectedUnits ?? current.projected_units,
+        next_slab_at:
+          processPayload.projection?.nextSlabAt ?? current.next_slab_at,
+        units_to_next_slab:
+          processPayload.projection?.unitsToNextSlab ?? current.units_to_next_slab,
+        estimated_bill:
+          processPayload.projection?.estimatedBill ?? current.estimated_bill,
+        estimated_delta:
+          processPayload.projection?.estimatedDelta ?? current.estimated_delta,
+        bill_risk: processPayload.projection?.billRisk ?? current.bill_risk,
+        advice_json: processPayload.advice
+          ? {
+              ...processPayload.advice,
+              tariff_source:
+                processPayload.tariff_source ??
+                current.advice_json?.tariff_source,
+              previous_reading_kwh:
+                processPayload.previous_reading_kwh ??
+                current.advice_json?.previous_reading_kwh,
+            }
+          : current.advice_json,
+      };
+    });
     setIsUploadingCapture(false);
     await loadLatestReading(userId);
   }
@@ -1278,25 +1325,40 @@ export function DashboardShell() {
                     </AlertDescription>
                   </Alert>
                   {latestReading ? (
-                    <div className="grid gap-3 rounded-xl border border-white/10 bg-white/5 p-4 sm:grid-cols-[1fr_auto]">
-                      <Input
-                        inputMode="numeric"
-                        placeholder="Correct kWh reading"
-                        value={manualReading}
-                        onChange={(event) => setManualReading(event.target.value)}
-                      />
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        disabled={isSavingManualReading}
-                        onClick={() => void saveManualReading(latestReading.id)}
-                      >
-                        {isSavingManualReading ? (
-                          <LoaderCircle className="size-4 animate-spin" />
-                        ) : null}
-                        Save reading
-                      </Button>
-                    </div>
+                    <details
+                      className={cn(
+                        "rounded-xl border border-white/10 bg-white/5 p-4",
+                        (latestReadingNeedsReview || latestReading.status === "failed") &&
+                          "border-amber-400/30 bg-amber-950/20"
+                      )}
+                      open={latestReadingNeedsReview || latestReading.status === "failed"}
+                    >
+                      <summary className="cursor-pointer text-sm font-bold">
+                        Manual correction fallback
+                      </summary>
+                      <p className="mt-2 text-xs font-medium text-muted-foreground">
+                        Use this only when OCR is unsure, the meter screen is blurred, or the value needs correction.
+                      </p>
+                      <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_auto]">
+                        <Input
+                          inputMode="numeric"
+                          placeholder="Correct kWh reading"
+                          value={manualReading}
+                          onChange={(event) => setManualReading(event.target.value)}
+                        />
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          disabled={isSavingManualReading}
+                          onClick={() => void saveManualReading(latestReading.id)}
+                        >
+                          {isSavingManualReading ? (
+                            <LoaderCircle className="size-4 animate-spin" />
+                          ) : null}
+                          Save correction
+                        </Button>
+                      </div>
+                    </details>
                   ) : null}
                   {latestReading ? (
                     <div className="flex justify-end">
