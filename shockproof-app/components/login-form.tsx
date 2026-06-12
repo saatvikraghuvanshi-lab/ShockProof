@@ -79,7 +79,7 @@ export function LoginForm({
     }
   }
 
-  async function sendMagicLink() {
+  async function sendSignInEmail() {
     setStatus("");
     setPendingAction("email");
 
@@ -99,7 +99,7 @@ export function LoginForm({
       return;
     }
 
-    setStatus("Magic link sent. Open your email and continue from that link.");
+    setStatus("Sign-in email sent. Open your inbox and continue from the link.");
   }
 
   return (
@@ -117,7 +117,7 @@ export function LoginForm({
           <form
             onSubmit={(event) => {
               event.preventDefault();
-              void sendMagicLink();
+              void sendSignInEmail();
             }}
           >
             <FieldGroup>
@@ -169,7 +169,7 @@ export function LoginForm({
                   {pendingAction === "email" ? (
                     <LoaderCircle className="size-4 animate-spin" />
                   ) : null}
-                  Send magic link
+                  Send sign-in email
                 </Button>
                 {status ? (
                   <FieldDescription className="rounded-xl border border-white/10 bg-white/5 p-3 text-center">

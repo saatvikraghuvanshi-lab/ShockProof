@@ -19,11 +19,11 @@ https://YOUR-VERCEL-DOMAIN.vercel.app
 https://YOUR-VERCEL-DOMAIN.vercel.app/auth/callback
 ```
 
-## 2. Email magic link
+## 2. Email sign-in
 
 In **Authentication > Providers > Email**, keep email sign-in enabled.
 
-Use the app's **Send magic link** button with a real email address. The link should redirect back through:
+Use the app's **Send sign-in email** button with a real email address. The link should redirect back through:
 
 ```text
 /auth/callback
