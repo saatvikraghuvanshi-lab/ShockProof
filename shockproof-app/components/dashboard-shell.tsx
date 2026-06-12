@@ -1109,7 +1109,16 @@ export function DashboardShell() {
                         </div>
                       </div>
                       <div>
-                        <p className="text-sm font-bold text-destructive">
+                        <p
+                          className={cn(
+                            "text-sm font-bold",
+                            hasCleanProcessedReading
+                              ? "text-emerald-300"
+                              : latestReadingNeedsReview
+                                ? "text-amber-300"
+                                : "text-muted-foreground"
+                          )}
+                        >
                           {latestReadingNeedsReview
                             ? "OCR needs review"
                             : hasCleanProcessedReading
