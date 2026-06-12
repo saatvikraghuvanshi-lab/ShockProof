@@ -32,6 +32,12 @@ export async function generateGeminiJson<T>({
     throw new Error("Missing GEMINI_API_KEY.");
   }
 
+  if (!apiKey.startsWith("AIza")) {
+    throw new Error(
+      "GEMINI_API_KEY is set, but it does not look like a Google AI Studio API key. Create an API key in Google AI Studio and paste that value into .env.local."
+    );
+  }
+
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
     {
