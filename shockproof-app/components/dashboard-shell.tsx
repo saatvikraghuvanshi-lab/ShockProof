@@ -133,15 +133,18 @@ export function DashboardShell() {
 
   const loadLatestReading = useCallback(async (currentUserId: string) => {
     const supabase = createClient();
-    const { data: reading } = await supabase
+    const { data: readings } = await supabase
       .from("meter_readings")
       .select(
         "id, status, image_url, storage_path, reading_kwh, confidence, display_type, ai_notes, error_message"
       )
       .eq("user_id", currentUserId)
       .order("id", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .limit(10);
+    const reading =
+      readings?.find((item) => item.status === "processed" && item.reading_kwh) ??
+      readings?.[0] ??
+      null;
 
     setLatestReading((reading as MeterReading | null) ?? null);
   }, []);

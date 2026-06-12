@@ -12,17 +12,20 @@ type OcrResult = {
   reading_kwh?: number | string | null;
   display_number?: number | string | null;
   best_display_number?: number | string | null;
+  raw_display_text?: string | null;
   value?: number | string | null;
   confidence?: number;
   display_type?: string;
   notes?: string;
+  is_partial?: boolean;
 };
 
-function parseMeterReading(ocr: OcrResult) {
+function parseMeterReading(ocr: OcrResult, minimumDigits = 5) {
   const candidates = [
     ocr.reading_kwh,
     ocr.display_number,
     ocr.best_display_number,
+    ocr.raw_display_text,
     ocr.value,
   ];
 
@@ -31,7 +34,18 @@ function parseMeterReading(ocr: OcrResult) {
       continue;
     }
 
-    const normalized = String(candidate).replace(/[^\d.]/g, "");
+    const text = String(candidate).trim();
+
+    if (/[?x*_]/i.test(text)) {
+      continue;
+    }
+
+    const normalized = text.replace(/[^\d.]/g, "");
+
+    if (normalized.replace(/\D/g, "").length < minimumDigits) {
+      continue;
+    }
+
     const parsed = Number(normalized);
 
     if (Number.isFinite(parsed) && parsed >= 0) {
@@ -39,7 +53,7 @@ function parseMeterReading(ocr: OcrResult) {
     }
   }
 
-  const fallbackMatch = JSON.stringify(ocr).match(/\d{3,}(?:\.\d+)?/);
+  const fallbackMatch = JSON.stringify(ocr).match(/\d{5,}(?:\.\d+)?/);
 
   if (!fallbackMatch) {
     return null;
@@ -47,6 +61,22 @@ function parseMeterReading(ocr: OcrResult) {
 
   const parsed = Number(fallbackMatch[0]);
   return Number.isFinite(parsed) ? Math.round(parsed) : null;
+}
+
+function getOcrPrompt({ retryValue }: { retryValue?: number | null } = {}) {
+  return [
+    "You are reading an Indian digital electricity meter photo.",
+    "Extract the complete main number shown on the green LCD display.",
+    "Most real meter readings have 5 or 6 digits. Do not stop after the first 3 or 4 visible digits if more digits are present.",
+    "Ignore barcode numbers, serial numbers, printed labels, voltage, current, power factor, date, and time.",
+    "If a kWh, import energy, or total active energy label is visible, set display_type to kWh.",
+    "If the unit label is unclear but the LCD number is clear, still return the full LCD number and lower confidence.",
+    "If any LCD digit is unclear, put the uncertain digit in raw_display_text using ? and set is_partial true.",
+    retryValue
+      ? `A previous pass returned ${retryValue}, which may be a partial read. Re-inspect the whole LCD and return the full number if more digits are visible.`
+      : "",
+    "Return strict JSON only with reading_kwh, raw_display_text, confidence, display_type, notes, and is_partial.",
+  ].join(" ");
 }
 
 export async function POST(request: Request) {
@@ -102,26 +132,49 @@ export async function POST(request: Request) {
     const mimeType = fileData.type || "image/jpeg";
     const base64 = Buffer.from(await fileData.arrayBuffer()).toString("base64");
     const ocrModel = process.env.GEMINI_OCR_MODEL ?? "gemini-2.5-flash-lite";
-    const ocr = await generateGeminiJson<OcrResult>({
+    const ocrParts = [
+      {
+        inlineData: {
+          mimeType,
+          data: base64,
+        },
+      },
+    ];
+    let ocr = await generateGeminiJson<OcrResult>({
       model: ocrModel,
       parts: [
         {
-          text:
-            "You are reading an Indian digital electricity meter photo. Extract the main number shown on the green LCD display. If a kWh, import energy, or total active energy label is visible, set display_type to kWh. If the label is not visible but the LCD number is clear, still return that number as reading_kwh and lower the confidence. Ignore barcode numbers, serial numbers, voltage, current, power factor, date, and time. Return strict JSON only: reading_kwh as a number or numeric string, confidence from 0 to 1, display_type, and notes. For the provided photo, prefer the large LCD display digits over all printed text.",
+          text: getOcrPrompt(),
         },
-        {
-          inlineData: {
-            mimeType,
-            data: base64,
-          },
-        },
+        ...ocrParts,
       ],
     });
 
-    const readingKwh = parseMeterReading(ocr);
+    let readingKwh = parseMeterReading(ocr);
 
     if (readingKwh === null) {
-      throw new Error("Gemini did not return a valid kWh reading.");
+      const partialReading = parseMeterReading(ocr, 3);
+      const reviewModel =
+        process.env.GEMINI_OCR_REVIEW_MODEL ??
+        process.env.GEMINI_ADVICE_MODEL ??
+        "gemini-3.1-flash-lite";
+
+      ocr = await generateGeminiJson<OcrResult>({
+        model: reviewModel,
+        parts: [
+          {
+            text: getOcrPrompt({ retryValue: partialReading }),
+          },
+          ...ocrParts,
+        ],
+      });
+      readingKwh = parseMeterReading(ocr);
+    }
+
+    if (readingKwh === null) {
+      throw new Error(
+        "Gemini could not read the full LCD number clearly. Try a closer, sharper photo with the entire green display visible."
+      );
     }
 
     await admin
@@ -131,7 +184,9 @@ export async function POST(request: Request) {
         confidence: ocr.confidence ?? null,
         display_type: ocr.display_type ?? "kWh",
         processed_at: new Date().toISOString(),
-        ai_notes: ocr.notes ?? null,
+        ai_notes:
+          ocr.notes ??
+          (ocr.raw_display_text ? `Raw display: ${ocr.raw_display_text}` : null),
         error_message: null,
         status: "processed",
       })
