@@ -134,9 +134,16 @@ export function DashboardShell() {
     const supabase = createClient();
 
     async function checkSession() {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+      const sessionResult = await Promise.race([
+        supabase.auth.getSession(),
+        new Promise<never>((_, reject) => {
+          window.setTimeout(
+            () => reject(new Error("Session check timed out.")),
+            5000
+          );
+        }),
+      ]).catch(() => null);
+      const session = sessionResult?.data.session;
 
       if (!session) {
         router.replace("/login");
