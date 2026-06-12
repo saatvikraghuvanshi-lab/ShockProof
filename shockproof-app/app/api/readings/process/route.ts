@@ -31,8 +31,13 @@ type OcrResult = {
   value?: number | string | null;
   confidence?: number;
   display_type?: string;
+  meter_type?: string;
+  screen_label?: string | null;
+  is_energy_register?: boolean;
+  is_cumulative_total?: boolean;
   notes?: string;
   is_partial?: boolean;
+  rejection_reason?: string | null;
 };
 
 type AdviceResult = {
@@ -50,6 +55,10 @@ const fallbackDomesticSlabs: TariffSlab[] = [
 ];
 
 function parseMeterReading(ocr: OcrResult, minimumDigits = 5) {
+  if (ocr.is_energy_register === false) {
+    return null;
+  }
+
   const candidates = [
     ocr.reading_kwh,
     ocr.display_number,
@@ -73,7 +82,9 @@ function parseMeterReading(ocr: OcrResult, minimumDigits = 5) {
       continue;
     }
 
-    const normalized = text.replace(/[^\d.]/g, "");
+    const normalized = text
+      .replace(/,/g, "")
+      .replace(/[^\d.]/g, "");
 
     if (normalized.replace(/\D/g, "").length < minimumDigits) {
       continue;
@@ -85,15 +96,7 @@ function parseMeterReading(ocr: OcrResult, minimumDigits = 5) {
       return Math.round(parsed);
     }
   }
-
-  const fallbackMatch = JSON.stringify(ocr).match(/\d{5,}(?:\.\d+)?/);
-
-  if (!fallbackMatch) {
-    return null;
-  }
-
-  const parsed = Number(fallbackMatch[0]);
-  return Number.isFinite(parsed) ? Math.round(parsed) : null;
+  return null;
 }
 
 function isAmbiguousDateLikeReading(ocr: OcrResult, readingKwh: number) {
@@ -101,7 +104,9 @@ function isAmbiguousDateLikeReading(ocr: OcrResult, readingKwh: number) {
   const reviewText = [
     ocr.raw_display_text,
     ocr.display_type,
+    ocr.screen_label,
     ocr.notes,
+    ocr.rejection_reason,
   ]
     .filter(Boolean)
     .join(" ")
@@ -124,17 +129,20 @@ function isAmbiguousDateLikeReading(ocr: OcrResult, readingKwh: number) {
 
 function getOcrPrompt({ retryValue }: { retryValue?: number | null } = {}) {
   return [
-    "You are reading an Indian digital electricity meter photo.",
-    "Extract the complete main number shown on the green LCD display.",
-    "Most real meter readings have 5 or 6 digits. Do not stop after the first 3 or 4 visible digits if more digits are present.",
-    "Ignore barcode numbers, serial numbers, printed labels, voltage, current, power factor, date, and time.",
-    "If a kWh, import energy, or total active energy label is visible, set display_type to kWh.",
-    "If the unit label is unclear but the LCD number is clear, still return the full LCD number and lower confidence.",
-    "If any LCD digit is unclear, put the uncertain digit in raw_display_text using ? and set is_partial true.",
+    "You are an OCR system for Indian electricity meters. Identify the meter display type first, then extract only the cumulative active energy reading in kWh.",
+    "Supported Indian meter styles include: single-phase LCD static kWh meters, three-phase LCD meters, prepaid/keypad smart meters, DLMS/AMI smart meters, net meters with import/export screens, TOD/time-of-day meters, older electromechanical odometer meters, and video captures where the screen cycles through multiple pages.",
+    "Target register priority: Total Import Active Energy kWh, Cumulative kWh, Imp kWh, Import kWh, T kWh, A+ kWh, 1.8.0, or total active energy. For net meters, prefer import kWh over export kWh unless import is not visible.",
+    "Do not use instant load kW, voltage V, current A, power factor PF, frequency Hz, balance/credit, prepaid amount, relay status, meter number, serial number, barcode, consumer number, date, month/year, time, demand kVA/kW, export kWh, MD, TOD slot values, or printed labels.",
+    "For LCD/video cycling meters, inspect all visible screens and pick the screen that is clearly the cumulative import kWh energy register.",
+    "For odometer/mechanical meters, read the main black/white digit register as kWh; ignore small red decimal wheels unless needed for rounding.",
+    "If the main number includes a decimal point, return reading_kwh rounded to the nearest integer and raw_display_text with the decimal preserved.",
+    "If the screen is a date/time/month-year or any non-energy page, set is_energy_register false, reading_kwh null, and explain rejection_reason.",
+    "If the unit/register label is unclear but the display is very likely cumulative energy, set is_energy_register true and lower confidence.",
+    "If any digit is unclear, put ? in raw_display_text, set is_partial true, and do not guess the digit.",
     retryValue
       ? `A previous pass returned ${retryValue}, which may be a partial read. Re-inspect the whole LCD and return the full number if more digits are visible.`
       : "",
-    "Return strict JSON only with reading_kwh, raw_display_text, confidence, display_type, notes, and is_partial.",
+    "Return strict JSON only with reading_kwh, raw_display_text, confidence, display_type, meter_type, screen_label, is_energy_register, is_cumulative_total, notes, is_partial, and rejection_reason.",
   ].join(" ");
 }
 
@@ -367,6 +375,13 @@ export async function POST(request: Request) {
 
     let readingKwh = parseMeterReading(ocr);
 
+    if (ocr.is_energy_register === false) {
+      throw new Error(
+        ocr.rejection_reason ??
+          "Gemini found a meter screen, but it was not the cumulative kWh energy register. Upload a photo or video showing the kWh/import energy screen."
+      );
+    }
+
     if (readingKwh === null) {
       const partialReading = parseMeterReading(ocr, 3);
       const reviewModel =
@@ -395,6 +410,13 @@ export async function POST(request: Request) {
       readingKwh = parseMeterReading(ocr);
     }
 
+    if (ocr.is_energy_register === false) {
+      throw new Error(
+        ocr.rejection_reason ??
+          "Gemini found a meter screen, but it was not the cumulative kWh energy register. Upload a photo or video showing the kWh/import energy screen."
+      );
+    }
+
     if (readingKwh !== null && isAmbiguousDateLikeReading(ocr, readingKwh)) {
       throw new Error(
         "Gemini returned a date-like or partial reading instead of a clear kWh value. Use a sharper photo or enter the reading manually."
@@ -403,7 +425,7 @@ export async function POST(request: Request) {
 
     if (readingKwh === null) {
       throw new Error(
-        "Gemini could not read the full LCD number clearly. Try a closer, sharper photo with the entire green display visible."
+        "Gemini could not read a complete cumulative kWh/import energy value. Try a closer photo with the kWh label visible, or upload a short video while the meter cycles through screens."
       );
     }
 
