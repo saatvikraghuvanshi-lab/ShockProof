@@ -6,6 +6,10 @@ export const metadata: Metadata = {
   title: "ShockProof | Smart Meter Tariff Guard",
   description:
     "AI tariff guard for Indian households using smart meter video readings and Discom slab projections.",
+  icons: {
+    icon: "/icon.svg",
+    apple: "/apple-icon.svg",
+  },
 };
 
 export default function RootLayout({
