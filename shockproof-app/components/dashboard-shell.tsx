@@ -104,6 +104,62 @@ const permissions = [
   ["AI advice", "Lets ShockProof generate localized savings guidance from tariff math."],
 ];
 
+const defaultSettingsDraft = {
+  fullName: "",
+  phone: "",
+  email: "",
+  consumerNumber: "",
+};
+
+type StoredSettings = {
+  selectedState: string;
+  selectedDiscom: string;
+  selectedBillingCycle: string;
+  customCycleDay: string;
+  selectedLanguage: string;
+  settingsDraft: typeof defaultSettingsDraft;
+};
+
+const defaultStoredSettings: StoredSettings = {
+  selectedState: "",
+  selectedDiscom: "",
+  selectedBillingCycle: "",
+  customCycleDay: "",
+  selectedLanguage: "",
+  settingsDraft: defaultSettingsDraft,
+};
+
+function readStoredSettings(): StoredSettings {
+  if (typeof window === "undefined") {
+    return defaultStoredSettings;
+  }
+
+  const storedSettings = window.localStorage.getItem("shockproof-settings");
+
+  if (!storedSettings) {
+    return defaultStoredSettings;
+  }
+
+  try {
+    const parsed = JSON.parse(storedSettings) as Partial<StoredSettings>;
+
+    return {
+      selectedState: parsed.selectedState ?? "",
+      selectedDiscom: parsed.selectedDiscom ?? "",
+      selectedBillingCycle: parsed.selectedBillingCycle ?? "",
+      customCycleDay: parsed.customCycleDay ?? "",
+      selectedLanguage: parsed.selectedLanguage ?? "",
+      settingsDraft: {
+        ...defaultSettingsDraft,
+        ...parsed.settingsDraft,
+      },
+    };
+  } catch {
+    window.localStorage.removeItem("shockproof-settings");
+    return defaultStoredSettings;
+  }
+}
+
 function formatReadingDate(value?: string | null) {
   if (!value) {
     return "Just now";
@@ -121,6 +177,7 @@ function formatCost(value: number) {
 
 export function DashboardShell() {
   const router = useRouter();
+  const initialSettings = useMemo(() => readStoredSettings(), []);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [userId, setUserId] = useState("");
   const [latestReading, setLatestReading] = useState<MeterReading | null>(null);
@@ -133,12 +190,31 @@ export function DashboardShell() {
     estimatedCostUsd: 0,
     recentEvents: [],
   });
-  const [selectedState, setSelectedState] = useState("");
+  const [selectedState, setSelectedState] = useState(
+    initialSettings.selectedState
+  );
+  const [selectedDiscom, setSelectedDiscom] = useState(
+    initialSettings.selectedDiscom
+  );
+  const [selectedBillingCycle, setSelectedBillingCycle] = useState(
+    initialSettings.selectedBillingCycle
+  );
+  const [customCycleDay, setCustomCycleDay] = useState(
+    initialSettings.customCycleDay
+  );
+  const [selectedLanguage, setSelectedLanguage] = useState(
+    initialSettings.selectedLanguage
+  );
+  const [settingsDraft, setSettingsDraft] = useState(
+    initialSettings.settingsDraft
+  );
   const [captureFileName, setCaptureFileName] = useState("");
   const [captureStatus, setCaptureStatus] = useState("");
+  const [manualReading, setManualReading] = useState("");
   const [activeTab, setActiveTab] = useState<AppTab>("dashboard");
   const [isUploadingCapture, setIsUploadingCapture] = useState(false);
   const [deletingReadingId, setDeletingReadingId] = useState<number | null>(null);
+  const [isSavingManualReading, setIsSavingManualReading] = useState(false);
   const [isPasskeyPending, setIsPasskeyPending] = useState(false);
   const [passkeyStatus, setPasskeyStatus] = useState("");
   const suggestedDiscoms = selectedState
@@ -261,6 +337,27 @@ export function DashboardShell() {
   }, [loadLatestReading, router]);
 
   useEffect(() => {
+    window.localStorage.setItem(
+      "shockproof-settings",
+      JSON.stringify({
+        selectedState,
+        selectedDiscom,
+        selectedBillingCycle,
+        customCycleDay,
+        selectedLanguage,
+        settingsDraft,
+      })
+    );
+  }, [
+    customCycleDay,
+    selectedBillingCycle,
+    selectedDiscom,
+    selectedLanguage,
+    selectedState,
+    settingsDraft,
+  ]);
+
+  useEffect(() => {
     if (!userId) {
       return;
     }
@@ -339,6 +436,41 @@ export function DashboardShell() {
       setCaptureStatus("Reading deleted.");
     }
 
+    await loadLatestReading(userId);
+  }
+
+  async function saveManualReading(readingId: number) {
+    if (!userId) {
+      return;
+    }
+
+    const readingKwh = Number(manualReading);
+
+    if (!Number.isFinite(readingKwh) || readingKwh < 0) {
+      setCaptureStatus("Enter a valid kWh number.");
+      return;
+    }
+
+    setIsSavingManualReading(true);
+
+    const response = await fetch(`/api/readings/${readingId}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ reading_kwh: readingKwh }),
+    });
+    const payload = await response.json();
+
+    setIsSavingManualReading(false);
+
+    if (!response.ok) {
+      setCaptureStatus(payload.error ?? "Could not save manual reading.");
+      return;
+    }
+
+    setManualReading("");
+    setCaptureStatus(`Saved ${payload.reading_kwh} kWh manually.`);
     await loadLatestReading(userId);
   }
 
@@ -772,6 +904,27 @@ export function DashboardShell() {
                     </AlertDescription>
                   </Alert>
                   {latestReading ? (
+                    <div className="grid gap-3 rounded-xl border border-white/10 bg-white/5 p-4 sm:grid-cols-[1fr_auto]">
+                      <Input
+                        inputMode="numeric"
+                        placeholder="Correct kWh reading"
+                        value={manualReading}
+                        onChange={(event) => setManualReading(event.target.value)}
+                      />
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        disabled={isSavingManualReading}
+                        onClick={() => void saveManualReading(latestReading.id)}
+                      >
+                        {isSavingManualReading ? (
+                          <LoaderCircle className="size-4 animate-spin" />
+                        ) : null}
+                        Save reading
+                      </Button>
+                    </div>
+                  ) : null}
+                  {latestReading ? (
                     <div className="flex justify-end">
                       <Button
                         type="button"
@@ -941,10 +1094,47 @@ export function DashboardShell() {
                       </p>
                     </div>
                     <div className="grid gap-3 sm:grid-cols-2">
-                      <Input placeholder="Full name" />
-                      <Input placeholder="Phone number" />
-                      <Input placeholder="Email address" type="email" />
-                      <Input placeholder="Consumer / account number" />
+                      <Input
+                        placeholder="Full name"
+                        value={settingsDraft.fullName}
+                        onChange={(event) =>
+                          setSettingsDraft((draft) => ({
+                            ...draft,
+                            fullName: event.target.value,
+                          }))
+                        }
+                      />
+                      <Input
+                        placeholder="Phone number"
+                        value={settingsDraft.phone}
+                        onChange={(event) =>
+                          setSettingsDraft((draft) => ({
+                            ...draft,
+                            phone: event.target.value,
+                          }))
+                        }
+                      />
+                      <Input
+                        placeholder="Email address"
+                        type="email"
+                        value={settingsDraft.email}
+                        onChange={(event) =>
+                          setSettingsDraft((draft) => ({
+                            ...draft,
+                            email: event.target.value,
+                          }))
+                        }
+                      />
+                      <Input
+                        placeholder="Consumer / account number"
+                        value={settingsDraft.consumerNumber}
+                        onChange={(event) =>
+                          setSettingsDraft((draft) => ({
+                            ...draft,
+                            consumerNumber: event.target.value,
+                          }))
+                        }
+                      />
                     </div>
                   </section>
 
@@ -970,7 +1160,7 @@ export function DashboardShell() {
                         </SelectContent>
                       </Select>
 
-                      <Select>
+                      <Select value={selectedDiscom} onValueChange={setSelectedDiscom}>
                         <SelectTrigger>
                           <SelectValue placeholder="Select Discom" />
                         </SelectTrigger>
@@ -983,7 +1173,10 @@ export function DashboardShell() {
                         </SelectContent>
                       </Select>
 
-                      <Select>
+                      <Select
+                        value={selectedBillingCycle}
+                        onValueChange={setSelectedBillingCycle}
+                      >
                         <SelectTrigger>
                           <SelectValue placeholder="Billing cycle" />
                         </SelectTrigger>
@@ -996,7 +1189,14 @@ export function DashboardShell() {
                         </SelectContent>
                       </Select>
 
-                      <Input placeholder="Custom cycle day" type="number" min={1} max={31} />
+                      <Input
+                        placeholder="Custom cycle day"
+                        type="number"
+                        min={1}
+                        max={31}
+                        value={customCycleDay}
+                        onChange={(event) => setCustomCycleDay(event.target.value)}
+                      />
                     </div>
                     <Alert className="border-accent/30 bg-accent/10">
                       <Gauge className="size-4" />
@@ -1008,11 +1208,35 @@ export function DashboardShell() {
                       <AlertDescription>
                         {suggestedDiscoms.length > 0 ? (
                           <span className="mt-2 flex flex-wrap gap-2">
-                            {suggestedDiscoms.map((discom) => (
-                              <Badge key={discom} variant="secondary">
-                                {discom}
-                              </Badge>
-                            ))}
+                            {suggestedDiscoms.map((discom) => {
+                              const discomValue =
+                                discomReferences.find(
+                                  (reference) =>
+                                    reference.value.toLowerCase() ===
+                                      discom.toLowerCase() ||
+                                    reference.name
+                                      .toLowerCase()
+                                      .includes(discom.toLowerCase())
+                                )?.value ?? "";
+
+                              return (
+                                <button
+                                  key={discom}
+                                  type="button"
+                                  disabled={!discomValue}
+                                  className={cn(
+                                    "rounded-full px-3 py-1 text-xs font-bold transition",
+                                    selectedDiscom === discomValue
+                                      ? "bg-primary text-primary-foreground"
+                                      : "bg-secondary text-secondary-foreground hover:bg-secondary/80",
+                                    !discomValue && "cursor-not-allowed opacity-60"
+                                  )}
+                                  onClick={() => setSelectedDiscom(discomValue)}
+                                >
+                                  {discom}
+                                </button>
+                              );
+                            })}
                           </span>
                         ) : (
                           "BESCOM is for Bengaluru/Karnataka areas, MSEDCL covers most of Maharashtra, TANGEDCO/TNEB is for Tamil Nadu, and BSES/Tata Power-DDL options are for Delhi zones. Use the provider name printed on the bill when unsure."
@@ -1028,7 +1252,10 @@ export function DashboardShell() {
                         Controls AI warning tone and household advice language.
                       </p>
                     </div>
-                    <Select>
+                    <Select
+                      value={selectedLanguage}
+                      onValueChange={setSelectedLanguage}
+                    >
                       <SelectTrigger className="max-w-sm">
                         <SelectValue placeholder="Select language" />
                       </SelectTrigger>

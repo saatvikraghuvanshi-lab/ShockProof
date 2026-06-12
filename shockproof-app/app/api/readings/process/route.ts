@@ -66,6 +66,28 @@ function parseMeterReading(ocr: OcrResult, minimumDigits = 5) {
   return Number.isFinite(parsed) ? Math.round(parsed) : null;
 }
 
+function isAmbiguousDateLikeReading(ocr: OcrResult, readingKwh: number) {
+  const reviewText = [
+    ocr.raw_display_text,
+    ocr.display_type,
+    ocr.notes,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (ocr.is_partial && readingKwh < 10000) {
+    return true;
+  }
+
+  return (
+    readingKwh < 10000 &&
+    /\b(date|time|ambiguous|ambiguity|provisional|unclear|partial)\b/.test(
+      reviewText
+    )
+  );
+}
+
 function getOcrPrompt({ retryValue }: { retryValue?: number | null } = {}) {
   return [
     "You are reading an Indian digital electricity meter photo.",
@@ -237,6 +259,12 @@ export async function POST(request: Request) {
         usage: reviewOcr.usage,
       });
       readingKwh = parseMeterReading(ocr);
+    }
+
+    if (readingKwh !== null && isAmbiguousDateLikeReading(ocr, readingKwh)) {
+      throw new Error(
+        "Gemini returned a date-like or partial reading instead of a clear kWh value. Use a sharper photo or enter the reading manually."
+      );
     }
 
     if (readingKwh === null) {
