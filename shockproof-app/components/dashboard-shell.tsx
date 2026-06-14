@@ -92,10 +92,9 @@ const appTabs = [
   { value: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { value: "capture", label: "Capture", icon: Camera },
   { value: "advice", label: "Advice", icon: Sparkles },
-  { value: "settings", label: "Settings", icon: Settings },
 ] as const;
 
-type AppTab = (typeof appTabs)[number]["value"];
+type AppTab = (typeof appTabs)[number]["value"] | "settings";
 
 type ReadingId = number | string;
 
@@ -1206,13 +1205,13 @@ export function DashboardShell() {
     return (
       <main className="grid min-h-svh place-items-center px-6 text-center">
         <div>
-          <div className="mx-auto mb-4 grid size-12 place-items-center rounded-full bg-white/10 text-white">
+          <div className="mx-auto mb-4 grid size-12 place-items-center text-white">
             <Image
               src="/shockproof-mark.svg"
               alt=""
               width={48}
               height={48}
-              className="size-12 rounded-full object-cover"
+              className="size-12 object-contain"
             />
           </div>
           <p className="text-2xl font-extrabold">Checking access</p>
@@ -1234,7 +1233,7 @@ export function DashboardShell() {
               alt=""
               width={40}
               height={40}
-              className="size-10 rounded-full object-cover"
+              className="size-10 object-contain"
               priority
             />
             <div>
@@ -1251,13 +1250,17 @@ export function DashboardShell() {
                 <span className="hidden sm:inline">Account</span>
               </MenubarTrigger>
               <MenubarContent align="end">
-                <MenubarItem
-                  variant="destructive"
-                  onClick={() => void signOut()}
-                  onSelect={(event) => event.preventDefault()}
-                >
-                  <LogOut className="size-4" />
-                  Sign out
+                <MenubarItem asChild>
+                  <button type="button" onClick={() => setActiveTab("settings")}>
+                    <Settings className="size-4" />
+                    Settings
+                  </button>
+                </MenubarItem>
+                <MenubarItem asChild variant="destructive">
+                  <button type="button" onClick={() => void signOut()}>
+                    <LogOut className="size-4" />
+                    Sign out
+                  </button>
                 </MenubarItem>
               </MenubarContent>
             </MenubarMenu>
@@ -1272,7 +1275,7 @@ export function DashboardShell() {
               className="w-full gap-0"
             >
             <TabsList
-              className="grid !h-12 !w-full grid-cols-4 gap-1 overflow-hidden rounded-2xl border border-white/10 bg-white/8 p-1"
+              className="grid !h-12 !w-full grid-cols-3 gap-1 overflow-hidden rounded-2xl border border-white/10 bg-white/8 p-1"
               aria-label="Dashboard sections"
             >
               {appTabs.map((tab) => {
@@ -2347,7 +2350,6 @@ export function DashboardShell() {
         </section>
 
         <footer className="mt-auto flex flex-wrap items-center justify-center gap-x-4 gap-y-2 py-2 text-xs font-medium text-muted-foreground">
-          <span>ShockProof prototype</span>
           <Link href="/privacy" className="hover:text-foreground">
             Privacy Policy
           </Link>

@@ -20,7 +20,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
             alt=""
             width={32}
             height={32}
-            className="size-8 rounded-full object-cover"
+            className="size-8 object-contain"
             priority
           />
           <span className="font-display font-extrabold">ShockProof</span>
