@@ -33,6 +33,23 @@ import {
   suggestedDiscomsByState,
 } from "@/lib/india-power-options";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/browser";
@@ -45,7 +62,19 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
+import {
+  Menubar,
+  MenubarContent,
+  MenubarItem,
+  MenubarMenu,
+  MenubarTrigger,
+} from "@/components/ui/menubar";
 import { Progress } from "@/components/ui/progress";
 import {
   Select,
@@ -55,6 +84,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
 const appTabs = [
@@ -273,6 +304,70 @@ function formatRupeeCost(valueUsd: number) {
   }).format(valueInr);
 }
 
+function formatKwhValue(value?: number | null) {
+  return value === null || value === undefined
+    ? "not available"
+    : `${Math.round(value).toLocaleString("en-IN")} kWh`;
+}
+
+function buildAdviceMailDraft({
+  reading,
+  selectedState,
+  selectedDiscom,
+  selectedBillingCycle,
+}: {
+  reading: MeterReading | null;
+  selectedState: string;
+  selectedDiscom: string;
+  selectedBillingCycle: string;
+}) {
+  if (!reading) {
+    return "ShockProof report\n\nNo processed meter reading is available yet.";
+  }
+
+  const estimatedBill =
+    reading.estimated_bill === null || reading.estimated_bill === undefined
+      ? "not available"
+      : new Intl.NumberFormat("en-IN", {
+          style: "currency",
+          currency: "INR",
+          maximumFractionDigits: 0,
+        }).format(reading.estimated_bill);
+
+  const lines = [
+    "ShockProof meter report",
+    "",
+    `Reading: ${formatKwhValue(reading.reading_kwh)}`,
+    `Current usage: ${formatKwhValue(reading.current_usage)}`,
+    `Projected month-end usage: ${formatKwhValue(reading.projected_units)}`,
+    `Units to next slab: ${formatKwhValue(reading.units_to_next_slab)}`,
+    `Estimated bill risk: ${reading.bill_risk ?? "not available"}`,
+    `Estimated bill: ${estimatedBill}`,
+    `Tariff context: ${
+      [selectedState, selectedDiscom, selectedBillingCycle]
+        .filter(Boolean)
+        .join(" / ") || "not set"
+    }`,
+  ];
+
+  if (reading.advice_json?.summary) {
+    lines.push("", "Gemini advice:", reading.advice_json.summary);
+  }
+
+  if (reading.advice_json?.risk_note) {
+    lines.push("", "Risk note:", reading.advice_json.risk_note);
+  }
+
+  if (reading.advice_json?.actions?.length) {
+    lines.push("", "Recommended actions:");
+    reading.advice_json.actions.forEach((action, index) => {
+      lines.push(`${index + 1}. ${action}`);
+    });
+  }
+
+  return lines.join("\n");
+}
+
 function getBillingCycleDay(option: string, customDay: string) {
   if (option === "Custom date") {
     const parsed = Number(customDay);
@@ -333,12 +428,12 @@ function SettingsSection({
   const [isOpen, setIsOpen] = useState(defaultOpen);
 
   return (
-    <details
+    <Collapsible
       className="group min-w-0 rounded-2xl border border-white/10 bg-white/[0.03]"
       open={isOpen}
-      onToggle={(event) => setIsOpen(event.currentTarget.open)}
+      onOpenChange={setIsOpen}
     >
-      <summary className="flex cursor-pointer list-none items-start justify-between gap-4 p-4 marker:hidden [&::-webkit-details-marker]:hidden">
+      <CollapsibleTrigger className="flex w-full cursor-pointer list-none items-start justify-between gap-4 p-4 text-left">
         <div className="min-w-0">
           <h3 className="text-xl font-bold">{title}</h3>
           <p className="mt-1 break-words text-sm text-muted-foreground">
@@ -347,11 +442,71 @@ function SettingsSection({
         </div>
         <div className="flex shrink-0 items-center gap-2 text-muted-foreground">
           {icon}
-          <ChevronDown className="size-4 transition-transform group-open:rotate-180" />
+          <ChevronDown
+            className={cn(
+              "size-4 transition-transform",
+              isOpen && "rotate-180"
+            )}
+          />
         </div>
-      </summary>
-      <div className="grid min-w-0 gap-3 px-4 pb-4">{children}</div>
-    </details>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="grid min-w-0 gap-3 px-4 pb-4">
+        {children}
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+function DeleteReadingDialog({
+  readingId,
+  label,
+  disabled,
+  isDeleting,
+  onDelete,
+}: {
+  readingId: ReadingId;
+  label: string;
+  disabled: boolean;
+  isDeleting: boolean;
+  onDelete: (readingId: ReadingId) => void;
+}) {
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="gap-2 text-muted-foreground hover:text-destructive"
+          disabled={disabled}
+        >
+          {isDeleting ? (
+            <LoaderCircle className="size-4 animate-spin" />
+          ) : (
+            <Trash2 className="size-4" />
+          )}
+          {label}
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete this capture?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This removes the saved reading and its uploaded meter media from
+            ShockProof. This cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            onClick={() => onDelete(readingId)}
+          >
+            Delete
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
@@ -399,6 +554,7 @@ export function DashboardShell() {
   const [captureFileName, setCaptureFileName] = useState("");
   const [captureStatus, setCaptureStatus] = useState("");
   const [manualReading, setManualReading] = useState("");
+  const [mailDraft, setMailDraft] = useState("");
   const [activeTab, setActiveTab] = useState<AppTab>("dashboard");
   const [isUploadingCapture, setIsUploadingCapture] = useState(false);
   const [deletingReadingId, setDeletingReadingId] = useState<ReadingId | null>(null);
@@ -424,6 +580,20 @@ export function DashboardShell() {
   const latestReadingConfirmed = latestReading?.ai_notes
     ?.toLowerCase()
     .includes("confirmed by user");
+  const latestMailDraft = useMemo(
+    () =>
+      buildAdviceMailDraft({
+        reading: latestReading,
+        selectedState,
+        selectedDiscom,
+        selectedBillingCycle,
+      }),
+    [latestReading, selectedBillingCycle, selectedDiscom, selectedState]
+  );
+  const mailBody = mailDraft.trim() ? mailDraft : latestMailDraft;
+  const mailHref = `mailto:${settingsDraft.email}?subject=${encodeURIComponent(
+    "ShockProof meter report"
+  )}&body=${encodeURIComponent(mailBody)}`;
 
   const metrics = useMemo(
     () => [
@@ -1074,46 +1244,59 @@ export function DashboardShell() {
               </p>
             </div>
           </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="gap-2 rounded-full text-muted-foreground hover:bg-white/10 hover:text-white"
-            onClick={() => void signOut()}
-          >
-            <LogOut className="size-4" />
-            <span className="hidden sm:inline">Sign out</span>
-          </Button>
+          <Menubar className="border-white/10 bg-white/5">
+            <MenubarMenu>
+              <MenubarTrigger className="gap-2 text-muted-foreground">
+                <Settings className="size-4" />
+                <span className="hidden sm:inline">Account</span>
+              </MenubarTrigger>
+              <MenubarContent align="end">
+                <MenubarItem onSelect={() => setActiveTab("settings")}>
+                  <Settings className="size-4" />
+                  Settings
+                </MenubarItem>
+                <MenubarItem
+                  variant="destructive"
+                  onSelect={() => void signOut()}
+                >
+                  <LogOut className="size-4" />
+                  Sign out
+                </MenubarItem>
+              </MenubarContent>
+            </MenubarMenu>
+          </Menubar>
         </header>
 
         <section className="rounded-3xl border border-white/10 bg-background/55 p-3 shadow-2xl backdrop-blur-xl">
           <div className="w-full">
-            <nav
+            <Tabs
+              value={activeTab}
+              onValueChange={(value) => setActiveTab(value as AppTab)}
+            >
+            <TabsList
               className="grid h-12 w-full grid-cols-4 gap-1 rounded-2xl border border-white/10 bg-white/8 p-1"
               aria-label="Dashboard sections"
             >
               {appTabs.map((tab) => {
                 const Icon = tab.icon;
-                const isActive = activeTab === tab.value;
 
                 return (
-                  <button
+                  <TabsTrigger
                     key={tab.value}
-                    type="button"
+                    value={tab.value}
                     className={cn(
                       "flex h-10 min-w-0 items-center justify-center gap-2 rounded-xl px-2 text-xs font-bold transition-colors sm:text-sm",
-                      isActive
-                        ? "bg-background text-foreground shadow-sm"
-                        : "text-muted-foreground hover:bg-white/5 hover:text-foreground"
+                      "data-active:bg-background data-active:text-foreground data-active:shadow-sm",
+                      "text-muted-foreground hover:bg-white/5 hover:text-foreground"
                     )}
-                    aria-current={isActive ? "page" : undefined}
-                    onClick={() => setActiveTab(tab.value)}
                   >
                     <Icon className="size-4 shrink-0" />
                     <span className="hidden truncate sm:inline">{tab.label}</span>
-                  </button>
+                  </TabsTrigger>
                 );
               })}
-            </nav>
+            </TabsList>
+            </Tabs>
 
             {activeTab === "dashboard" ? (
             <section className="mt-3 space-y-3">
@@ -1420,29 +1603,22 @@ export function DashboardShell() {
                           <PencilLine className="size-4" />
                           Edit reading
                         </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="gap-2"
+                        <DeleteReadingDialog
+                          readingId={latestReading.id}
+                          label="Delete capture"
                           disabled={deletingReadingId === latestReading.id}
-                          onClick={() => void deleteReading(latestReading.id)}
-                        >
-                          {deletingReadingId === latestReading.id ? (
-                            <LoaderCircle className="size-4 animate-spin" />
-                          ) : (
-                            <Trash2 className="size-4" />
-                          )}
-                          Delete capture
-                        </Button>
+                          isDeleting={deletingReadingId === latestReading.id}
+                          onDelete={(readingId) => void deleteReading(readingId)}
+                        />
                       </div>
                     </div>
                   ) : null}
                   {latestReading ? (
-                    <details
+                    <Collapsible
                       className={cn(
                         "rounded-xl border border-white/10 bg-white/5 p-4",
-                        (latestReadingNeedsReview || latestReading.status === "failed") &&
+                        (latestReadingNeedsReview ||
+                          latestReading.status === "failed") &&
                           "border-amber-400/30 bg-amber-950/20"
                       )}
                       open={
@@ -1450,13 +1626,21 @@ export function DashboardShell() {
                         latestReadingNeedsReview ||
                         latestReading.status === "failed"
                       }
-                      onToggle={(event) =>
-                        setIsEditingManualReading(event.currentTarget.open)
-                      }
+                      onOpenChange={setIsEditingManualReading}
                     >
-                      <summary className="cursor-pointer text-sm font-bold">
-                        Manual correction fallback
-                      </summary>
+                      <CollapsibleTrigger className="flex w-full items-center justify-between gap-3 text-left text-sm font-bold">
+                        <span>Manual correction fallback</span>
+                        <ChevronDown
+                          className={cn(
+                            "size-4 text-muted-foreground transition-transform",
+                            (isEditingManualReading ||
+                              latestReadingNeedsReview ||
+                              latestReading.status === "failed") &&
+                              "rotate-180"
+                          )}
+                        />
+                      </CollapsibleTrigger>
+                      <CollapsibleContent>
                       <p className="mt-2 text-xs font-medium text-muted-foreground">
                         Use this only when OCR is unsure, the meter screen is blurred, or the value needs correction.
                       </p>
@@ -1479,7 +1663,8 @@ export function DashboardShell() {
                           Save correction
                         </Button>
                       </div>
-                    </details>
+                      </CollapsibleContent>
+                    </Collapsible>
                   ) : null}
                 </CardContent>
               </Card>
@@ -1551,6 +1736,48 @@ export function DashboardShell() {
                       ) : null}
                     </div>
                   ) : null}
+                </CardContent>
+              </Card>
+
+              <Card className="border-white/10 bg-card/70">
+                <CardHeader>
+                  <CardDescription>Share report</CardDescription>
+                  <CardTitle className="text-xl font-extrabold">
+                    Mail-ready summary
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="grid gap-3">
+                  <Textarea
+                    rows={8}
+                    value={mailDraft}
+                    placeholder={latestMailDraft}
+                    onChange={(event) => setMailDraft(event.target.value)}
+                    className="min-h-40 resize-y"
+                  />
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-xs font-medium text-muted-foreground">
+                      Edit this before sending. If left blank, ShockProof uses
+                      the latest generated report.
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => setMailDraft(latestMailDraft)}
+                      >
+                        Use latest report
+                      </Button>
+                      {latestReading ? (
+                        <Button asChild>
+                          <a href={mailHref}>Open email draft</a>
+                        </Button>
+                      ) : (
+                        <Button type="button" disabled>
+                          Open email draft
+                        </Button>
+                      )}
+                    </div>
+                  </div>
                 </CardContent>
               </Card>
 
@@ -1732,21 +1959,13 @@ export function DashboardShell() {
                                   reading.storage_path}
                               </p>
                             </div>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              className="gap-2 text-muted-foreground hover:text-destructive sm:w-auto"
+                            <DeleteReadingDialog
+                              readingId={reading.id}
+                              label="Delete"
                               disabled={deletingReadingId === reading.id}
-                              onClick={() => void deleteReading(reading.id)}
-                            >
-                              {deletingReadingId === reading.id ? (
-                                <LoaderCircle className="size-4 animate-spin" />
-                              ) : (
-                                <Trash2 className="size-4" />
-                              )}
-                              Delete
-                            </Button>
+                              isDeleting={deletingReadingId === reading.id}
+                              onDelete={(readingId) => void deleteReading(readingId)}
+                            />
                           </div>
                         ))
                       ) : (
@@ -1934,38 +2153,39 @@ export function DashboardShell() {
                     title="First-time guide"
                     description="Set up the tariff context first, then add secure device access after the account is working."
                   >
-                    <div className="grid min-w-0 gap-3 lg:grid-cols-[repeat(2,minmax(0,1fr))]">
-                      <div className="min-w-0 rounded-xl border border-white/10 bg-white/5 p-4">
-                        <p className="font-bold">1. Match your electricity bill</p>
-                        <p className="mt-1 text-sm text-muted-foreground">
-                          Select the state, Discom, billing cycle, and language
-                          used at home. This is what later projections and slab
-                          warnings will use.
-                        </p>
-                      </div>
-                      <div className="min-w-0 rounded-xl border border-white/10 bg-white/5 p-4">
-                        <p className="font-bold">2. Capture the meter display</p>
-                        <p className="mt-1 text-sm text-muted-foreground">
-                          Use a sharp photo when the kWh display is visible.
-                          Use video only when the meter cycles between screens.
-                        </p>
-                      </div>
-                      <div className="min-w-0 rounded-xl border border-white/10 bg-white/5 p-4">
-                        <p className="font-bold">3. Review OCR before trusting it</p>
-                        <p className="mt-1 text-sm text-muted-foreground">
-                          If Gemini is unsure or mistakes a date for a reading,
-                          save the correct kWh manually from the Capture tab.
-                        </p>
-                      </div>
-                      <div className="min-w-0 rounded-xl border border-white/10 bg-white/5 p-4">
-                        <p className="font-bold">4. Watch slab risk and advice</p>
-                        <p className="mt-1 text-sm text-muted-foreground">
-                          Once readings and tariff rules are connected,
-                          ShockProof can compare current usage with the billing
-                          cycle and warn before slab jumps.
-                        </p>
-                      </div>
-                    </div>
+                    <Accordion type="single" collapsible className="grid gap-2">
+                      {[
+                        [
+                          "1. Match your electricity bill",
+                          "Select the state, Discom, billing cycle, and language used at home. This is what later projections and slab warnings will use.",
+                        ],
+                        [
+                          "2. Capture the meter display",
+                          "Use a sharp photo when the kWh display is visible. Use video only when the meter cycles between screens.",
+                        ],
+                        [
+                          "3. Review OCR before trusting it",
+                          "If Gemini is unsure or mistakes a date for a reading, save the correct kWh manually from the Capture tab.",
+                        ],
+                        [
+                          "4. Watch slab risk and advice",
+                          "Once readings and tariff rules are connected, ShockProof can compare current usage with the billing cycle and warn before slab jumps.",
+                        ],
+                      ].map(([title, copy]) => (
+                        <AccordionItem
+                          key={title}
+                          value={title}
+                          className="rounded-xl border border-white/10 bg-white/5 px-4"
+                        >
+                          <AccordionTrigger className="text-left font-bold">
+                            {title}
+                          </AccordionTrigger>
+                          <AccordionContent className="text-sm text-muted-foreground">
+                            {copy}
+                          </AccordionContent>
+                        </AccordionItem>
+                      ))}
+                    </Accordion>
                     <div className="min-w-0 rounded-xl border border-white/10 bg-white/5 p-4">
                       <p className="font-bold">Passkeys by device</p>
                       <div className="mt-3 grid min-w-0 gap-3 md:grid-cols-[repeat(2,minmax(0,1fr))]">
