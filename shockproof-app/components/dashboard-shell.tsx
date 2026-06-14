@@ -1251,13 +1251,10 @@ export function DashboardShell() {
                 <span className="hidden sm:inline">Account</span>
               </MenubarTrigger>
               <MenubarContent align="end">
-                <MenubarItem onSelect={() => setActiveTab("settings")}>
-                  <Settings className="size-4" />
-                  Settings
-                </MenubarItem>
                 <MenubarItem
                   variant="destructive"
-                  onSelect={() => void signOut()}
+                  onClick={() => void signOut()}
+                  onSelect={(event) => event.preventDefault()}
                 >
                   <LogOut className="size-4" />
                   Sign out
@@ -1272,9 +1269,10 @@ export function DashboardShell() {
             <Tabs
               value={activeTab}
               onValueChange={(value) => setActiveTab(value as AppTab)}
+              className="w-full gap-0"
             >
             <TabsList
-              className="grid h-12 w-full grid-cols-4 gap-1 rounded-2xl border border-white/10 bg-white/8 p-1"
+              className="grid !h-12 !w-full grid-cols-4 gap-1 overflow-hidden rounded-2xl border border-white/10 bg-white/8 p-1"
               aria-label="Dashboard sections"
             >
               {appTabs.map((tab) => {
@@ -1285,7 +1283,7 @@ export function DashboardShell() {
                     key={tab.value}
                     value={tab.value}
                     className={cn(
-                      "flex h-10 min-w-0 items-center justify-center gap-2 rounded-xl px-2 text-xs font-bold transition-colors sm:text-sm",
+                      "flex !h-10 min-w-0 items-center justify-center gap-2 rounded-xl px-2 text-xs font-bold transition-colors after:hidden sm:text-sm",
                       "data-active:bg-background data-active:text-foreground data-active:shadow-sm",
                       "text-muted-foreground hover:bg-white/5 hover:text-foreground"
                     )}
