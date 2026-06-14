@@ -1247,7 +1247,7 @@ export function DashboardShell() {
             <MenubarMenu>
               <MenubarTrigger className="gap-2 text-muted-foreground">
                 <Settings className="size-4" />
-                <span className="hidden sm:inline">Account</span>
+                <span className="hidden sm:inline">Menu</span>
               </MenubarTrigger>
               <MenubarContent align="end">
                 <MenubarItem asChild>
